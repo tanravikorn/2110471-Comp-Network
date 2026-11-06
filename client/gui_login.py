@@ -1,19 +1,19 @@
 """
 Module: client/gui_login.py
-Purpose: Tkinter Login & Server Connection Dialog
-Mapped Requirements:
-  - R1 (System Architecture): Allows specifying the Server IP address and TCP Port so clients
-    on separate physical computers can connect over LAN.
-  - R3 (Unique Client Name): Prompts the user for a unique client name and displays an error
-    if the server reports that the name is already taken by another connected client.
+Purpose: Tkinter login screen and R3 username registration handshake.
 """
 
+import queue
 import tkinter as tk
 from tkinter import ttk
-import queue
 from typing import Callable
 
-from common.protocol import DEFAULT_PORT, MSG_ERROR, MSG_REGISTER_ACK
+from common.protocol import (
+    DEFAULT_PORT,
+    ERR_USERNAME_TAKEN,
+    MSG_ERROR,
+    MSG_REGISTER_ACK,
+)
 
 
 class LoginWindow(ttk.Frame):
@@ -28,7 +28,6 @@ class LoginWindow(ttk.Frame):
         self.on_login_success = on_login_success
         self._polling = False
         self._pending_username = ""
-
         self.columnconfigure(1, weight=1)
 
         ttk.Label(self, text="Server IP").grid(row=0, column=0, sticky="w", padx=(0, 12), pady=4)
@@ -114,7 +113,7 @@ class LoginWindow(ttk.Frame):
                     self._polling = False
                     return
 
-                if msg_type == MSG_ERROR and payload.get("code") == "USERNAME_TAKEN":
+                if msg_type == MSG_ERROR and payload.get("code") == ERR_USERNAME_TAKEN:
                     self.set_status(payload.get("message", "Username is already taken."))
                     self.connect_button.configure(state="normal")
                     self.username_entry.focus_set()
@@ -122,7 +121,7 @@ class LoginWindow(ttk.Frame):
                     self._polling = False
                     return
 
-                if msg_type == "DISCONNECT":
+                if msg_type in ("DISCONNECT", "DISCONNECTED"):
                     self.set_status("Disconnected from the server.")
                     self.connect_button.configure(state="normal")
                     self._polling = False

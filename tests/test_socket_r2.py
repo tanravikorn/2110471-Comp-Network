@@ -80,21 +80,16 @@ class TestSocketR2(unittest.TestCase):
         try:
             # 2. Client sends a JSON message over the TCP socket
             msg_sent = {
-                "type": "CHAT_MSG",
-                "payload": {"text": "Hello Socket Programming!"},
+                "type": "REGISTER",
+                "payload": {"username": "R2Tester"},
             }
             client_sock.sendall(encode_message(msg_sent))
 
             # 3. Client receives JSON response from server over the TCP socket
             response = buf.read_message()
 
-            self.assertEqual(response[KEY_TYPE], "RESPONSE")
-            self.assertEqual(response[KEY_PAYLOAD]["status"], "OK")
-            self.assertEqual(response[KEY_PAYLOAD]["echo_type"], "CHAT_MSG")
-            self.assertEqual(
-                response[KEY_PAYLOAD]["echo_payload"]["text"],
-                "Hello Socket Programming!",
-            )
+            self.assertEqual(response[KEY_TYPE], "REGISTER_ACK")
+            self.assertTrue(response[KEY_PAYLOAD]["success"])
 
         finally:
             client_sock.close()

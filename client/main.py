@@ -1,6 +1,6 @@
 """
 Module: client/main.py
-Purpose: Client Application Entry Point & High-Level GUI Controller
+Purpose: Client application entry point and high-level GUI controller.
 """
 
 import tkinter as tk
