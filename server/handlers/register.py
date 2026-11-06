@@ -11,7 +11,6 @@ import socket
 from typing import Any, Dict
 
 from common.protocol import (
-    ERR_USERNAME_TAKEN,
     MSG_CLIENT_LIST,
     MSG_REGISTER_ACK,
     encode_message,
@@ -70,8 +69,7 @@ def handle_register(
         logger.warning("Rejected registration: empty username")
         send_packet(client_sock, MSG_REGISTER_ACK, {
             "success": False,
-            "message": "Username cannot be empty",
-            "code": ERR_USERNAME_TAKEN,
+            "message": "Username cannot be empty"
         })
         return False
 
@@ -93,7 +91,6 @@ def handle_register(
         logger.warning(f"Rejected registration: '{requested_name}' is already taken")
         send_packet(client_sock, MSG_REGISTER_ACK, {
             "success": False,
-            "message": f"Username '{requested_name}' is already taken",
-            "code": ERR_USERNAME_TAKEN,
+            "message": f"Username '{requested_name}' is already taken"
         })
         return False

@@ -36,15 +36,12 @@ def send_packet(sock: socket.socket, msg_type: str, payload: Optional[Dict[str, 
 def handle_client(
     client_sock: socket.socket,
     client_addr: Tuple[str, int],
-    state: Optional[ServerState] = None,
+    state: ServerState,
 ) -> None:
     """
     Handles a single client's raw TCP socket connection.
     Routes incoming JSON actions to their respective modular handlers in server/handlers/.
     """
-
-    if state is None:
-        state = ServerState()
 
     session: Dict[str, Any] = {"username": None}
     addr_str = f"{client_addr[0]}:{client_addr[1]}"
