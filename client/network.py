@@ -9,64 +9,135 @@ Mapped Requirements:
     and Base64 WAV voice clips (`VOICE_MSG`), while queuing incoming server packets for the GUI.
 """
 
-# ==============================================================================
-# TODO 1: Define `NetworkClient` Class
-# ==============================================================================
-# - Attributes:
-#     - `self.sock: socket.socket | None = None`
-#     - `self.incoming_queue: queue.Queue = queue.Queue()` (thread-safe bridge to Tkinter)
-#     - `self.connected: bool = False`
-#     - `self.username: str | None = None`
+import queue
+import socket
+import threading
+from typing import Optional
 
-# ==============================================================================
-# TODO 2: Implement Connection & Background Listener Thread (R1, R2, B2)
-# ==============================================================================
-# - `connect(host: str, port: int) -> tuple[bool, str]`:
-#     Create TCP socket, connect to `(host, port)` (supports LAN IP or Cloud VPS Public IP, B2),
-#     set `self.connected = True`, and spawn a daemon `threading.Thread` running `self._receive_loop()`.
-#
-# - `_receive_loop() -> None`:
-#     Continuously read newline-delimited JSON envelopes from `self.sock` using `SocketLineBuffer`
-#     from `common.protocol`.
-#     Each parsed dict has the shape: `{"type": "...", "timestamp": "HH:MM:SS", "payload": {...}}`.
-#     Push each parsed dictionary `msg` into `self.incoming_queue.put(msg)`.
-#     If the server disconnects or an exception occurs, push a disconnect event to `self.incoming_queue`.
-#
-# - `disconnect() -> None`:
-#     Close `self.sock` cleanly and set `self.connected = False`.
+from common.protocol import (
+    MSG_AI_SUMMARY_REQ,
+    MSG_CREATE_GROUP,
+    MSG_GROUP,
+    MSG_JOIN_GROUP,
+    MSG_PRIVATE,
+    MSG_REGISTER,
+    MSG_TYPING,
+    MSG_VOICE_MSG,
+    SocketLineBuffer,
+    encode_message,
+)
 
-# ==============================================================================
-# TODO 3: Implement Fundamental Outgoing Methods (R3, R7, R8, R10, R11)
-# ==============================================================================
-# All outgoing methods call `encode_message(msg_type, payload)` from `common.protocol`
-# which wraps `payload` inside `{"type": msg_type, "timestamp": "HH:MM:SS", "payload": payload}\n`:
-#
-# - `send_register(username: str) -> None`:
-#     Send `MSG_REGISTER` with payload `{"username": username}` (R3).
-#
-# - `send_private_message(target_user: str, text: str) -> None`:
-#     Send `MSG_PRIVATE` with payload `{"to": target_user, "text": text}` (R7).
-#
-# - `send_create_group(group_name: str) -> None`:
-#     Send `MSG_CREATE_GROUP` with payload `{"group": group_name}` (R8).
-#
-# - `send_join_group(group_name: str) -> None`:
-#     Send `MSG_JOIN_GROUP` with payload `{"group": group_name}` (R10).
-#
-# - `send_group_message(group_name: str, text: str) -> None`:
-#     Send `MSG_GROUP` with payload `{"group": group_name, "text": text}` (R11).
 
-# ==============================================================================
-# TODO 4: Implement Bonus Feature Outgoing Methods (B1, B3, B4)
-# ==============================================================================
-# - `send_typing(room_type: str, target: str, is_typing: bool) -> None`:
-#     Send `MSG_TYPING` with payload:
-#     `{"room_type": room_type, "target": target, "is_typing": is_typing}` (B3).
-#
-# - `send_ai_summary_request(room_type: str, target: str) -> None`:
-#     Send `MSG_AI_SUMMARY_REQ` with payload:
-#     `{"room_type": room_type, "target": target}` (B1).
-#
-# - `send_voice_message(room_type: str, target: str, audio_b64: str, duration: float) -> None`:
-#     Send `MSG_VOICE_MSG` with payload:
-#     `{"room_type": room_type, "target": target, "audio_b64": audio_b64, "duration": duration}` (B4).
+class NetworkClient:
+    def __init__(self) -> None:
+        # Keep the socket state and the GUI-safe incoming queue together for the whole client lifetime.
+        self.sock: Optional[socket.socket] = None
+        self.incoming_queue: queue.Queue = queue.Queue()
+        self.connected = False
+        self.username: Optional[str] = None
+        # Multiple GUI actions must not send partial or interleaved TCP writes.
+        self._send_lock = threading.Lock()
+        self._receive_thread: Optional[threading.Thread] = None
+
+    def connect(self, host: str, port: int) -> tuple[bool, str]:
+        if self.connected:
+            return True, "Already connected"
+
+        sock = None
+        try:
+            # Use a short timeout only while connecting; otherwise the receiver should wait normally.
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((host, port))
+            sock.settimeout(None)
+            self.sock = sock
+            self.connected = True
+            # Reading happens on a daemon thread so incoming packets never block the Tkinter UI.
+            self._receive_thread = threading.Thread(
+                target=self._receive_loop,
+                name="NetworkReceive",
+                daemon=True,
+            )
+            self._receive_thread.start()
+            return True, "Connected"
+        except (OSError, socket.timeout) as exc:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            return False, str(exc)
+
+    def _receive_loop(self) -> None:
+        if self.sock is None:
+            return
+
+        # SocketLineBuffer handles packet fragmentation and multiple JSON packets in one TCP chunk.
+        line_buffer = SocketLineBuffer(self.sock)
+        try:
+            while self.connected:
+                msg = line_buffer.read_message()
+                # GUI windows poll this queue instead of directly touching Tkinter from the socket thread.
+                self.incoming_queue.put(msg)
+        except (EOFError, ConnectionResetError, ConnectionAbortedError, OSError):
+            if self.connected:
+                self.incoming_queue.put({"type": "DISCONNECT", "timestamp": "", "payload": {}})
+        finally:
+            self.connected = False
+
+    def _send(self, msg_type: str, payload: dict) -> bool:
+        if not self.connected or self.sock is None:
+            return False
+        try:
+            with self._send_lock:
+                # encode_message adds the protocol envelope and newline framing before sendall().
+                self.sock.sendall(encode_message(msg_type, payload))
+            return True
+        except (OSError, ConnectionError):
+            self.connected = False
+            return False
+
+    def disconnect(self) -> None:
+        # Stop the receive loop first, then close the socket and clear this session's username.
+        self.connected = False
+        if self.sock is not None:
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = None
+        self.username = None
+
+    def send_register(self, username: str) -> bool:
+        # R3 handshake: ask the server whether this username is available before opening the lobby.
+        return self._send(MSG_REGISTER, {"username": username})
+
+    def send_private_message(self, target_user: str, text: str) -> bool:
+        return self._send(MSG_PRIVATE, {"to": target_user, "text": text})
+
+    def send_create_group(self, group_name: str) -> bool:
+        return self._send(MSG_CREATE_GROUP, {"group": group_name})
+
+    def send_join_group(self, group_name: str) -> bool:
+        return self._send(MSG_JOIN_GROUP, {"group": group_name})
+
+    def send_group_message(self, group_name: str, text: str) -> bool:
+        return self._send(MSG_GROUP, {"group": group_name, "text": text})
+
+    def send_typing(self, room_type: str, target: str, is_typing: bool) -> bool:
+        return self._send(MSG_TYPING, {"room_type": room_type, "target": target, "is_typing": is_typing})
+
+    def send_ai_summary_request(self, room_type: str, target: str) -> bool:
+        return self._send(MSG_AI_SUMMARY_REQ, {"room_type": room_type, "target": target})
+
+    def send_voice_message(self, room_type: str, target: str, audio_b64: str, duration: float) -> bool:
+        return self._send(MSG_VOICE_MSG, {
+            "room_type": room_type,
+            "target": target,
+            "audio_b64": audio_b64,
+            "duration": duration,
+        })
