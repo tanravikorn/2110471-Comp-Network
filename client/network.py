@@ -17,14 +17,7 @@ from common.protocol import (
     BUFFER_SIZE,
     DEFAULT_HOST,
     DEFAULT_PORT,
-    MSG_AI_SUMMARY_REQ,
-    MSG_CREATE_GROUP,
-    MSG_GROUP,
-    MSG_JOIN_GROUP,
-    MSG_PRIVATE,
     MSG_REGISTER,
-    MSG_TYPING,
-    MSG_VOICE_MSG,
     SocketLineBuffer,
     encode_message,
 )
@@ -91,17 +84,9 @@ class NetworkClient:
         except Exception:
             self.disconnect()
 
-    # ==========================================================================
-    # Fundamental Outgoing Action Methods (R3, R7, R8, R10, R11)
-    # ==========================================================================
     def send_register(self, username: str) -> None:
-        """Transmits client registration packet (R3)."""
-        self.username = username
+        """Sends MSG_REGISTER with unique username payload (R3)."""
         self.send_packet(MSG_REGISTER, {"username": username})
-
-    def send_private_message(self, target_user: str, text: str) -> None:
-        """Transmits 1-on-1 private message (R7)."""
-        self.send_packet(MSG_PRIVATE, {"to": target_user, "text": text})
 
     def send_create_group(self, group_name: str) -> None:
         """Transmits group creation packet (R8)."""
