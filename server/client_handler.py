@@ -4,6 +4,7 @@ Purpose: Per-Client TCP Socket Connection & Request Router
 Mapped Requirements:
   - R2 (TCP Socket Stream): Receives newline-delimited JSON packets via SocketLineBuffer.
   - R3–R11: Routes actions to modular handlers in server/handlers/.
+  - B1 (AI Summary): Routes MSG_AI_SUMMARY_REQ to handle_ai_summary.
   - B3 (Typing Indicator): Routes MSG_TYPING to handle_typing.
   - B4 (Voice Message): Routes MSG_VOICE_MSG to handle_voice_msg.
 """
@@ -16,6 +17,7 @@ from common.protocol import (
     ERR_NOT_REGISTERED,
     KEY_PAYLOAD,
     KEY_TYPE,
+    MSG_AI_SUMMARY_REQ,
     MSG_CLIENT_LIST,
     MSG_CREATE_GROUP,
     MSG_ERROR,
@@ -32,6 +34,7 @@ from common.protocol import (
 from server.handlers import (
     broadcast_client_list,
     broadcast_group_list,
+    handle_ai_summary,
     handle_create_group,
     handle_group_msg,
     handle_join_group,
@@ -61,6 +64,12 @@ def handle_client(
     # Send initial online directory upon connection (R4)
     send_packet(client_sock, MSG_CLIENT_LIST, {"clients": state.get_client_list()})
 
+    # 60s timeout for unauthenticated connections to mitigate crawler bot thread leaks (Should Fix 4)
+    try:
+        client_sock.settimeout(60.0)
+    except (OSError, AttributeError):
+        pass
+
     line_buffer = SocketLineBuffer(client_sock)
 
     try:
@@ -75,6 +84,12 @@ def handle_client(
             # 1. Registration (R3)
             if msg_type == MSG_REGISTER:
                 handle_register(client_sock, payload, state, session)
+                if session.get("username"):
+                    # Remove unauthenticated timeout once registered
+                    try:
+                        client_sock.settimeout(None)
+                    except (OSError, AttributeError):
+                        pass
 
             # All other actions require active registration
             elif not session.get("username"):
@@ -107,7 +122,11 @@ def handle_client(
             elif msg_type == MSG_VOICE_MSG:
                 handle_voice_msg(client_sock, payload, state, session)
 
-            # 8. Fallback / Future Actions
+            # 8. AI Chat History Summarization (B1)
+            elif msg_type == MSG_AI_SUMMARY_REQ:
+                handle_ai_summary(client_sock, payload, state, session)
+
+            # 9. Fallback / Future Actions
             else:
                 response = build_message(
                     msg_type="RESPONSE",
@@ -121,6 +140,10 @@ def handle_client(
 
     except (EOFError, ConnectionError):
         logger.info(f"Client disconnected: {session.get('username') or addr_str}")
+    except (TimeoutError, socket.timeout):
+        logger.info(f"Connection timed out waiting for registration: {addr_str}")
+    except ValueError as val_err:
+        logger.warning(f"Protocol violation from {addr_str}: {val_err}")
     except Exception as exc:
         logger.error(f"Error handling client {addr_str}: {exc}", exc_info=True)
     finally:

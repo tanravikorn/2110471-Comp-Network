@@ -2,9 +2,9 @@
 
 **Document Status:** Active
 **Last Synchronized:** 2026-11-08
-**Current Sprint / Phase:** Phase 2 & Bonus B3 Typing + Bonus B4 Voice Relay Handlers Completed & 100% Tested (29/29 Tests Passing)
+**Current Sprint / Phase:** Bonus B1 (AI Summary) & Cloud VPS Hardening Completed (47/47 Tests Passing)
 
-
+---
 
 ## 1. Project Synopsis & Background
 - **What is this project?** A multi-client networked chat application built in Python using raw TCP Socket Programming and a Tkinter GUI.
@@ -31,7 +31,7 @@
 - **R11 (1.0) [Group]:** Each client can send a text message to a group they have joined. **Only the members of that chat group** can see the messages.
 
 ### Part 3: Bonus / Special Features (1.5 points)
-- **B1 [AI Summary]:** Server stores per-room chat history in memory and summarizes the conversation on request (`AI_SUMMARY_REQ`) using an LLM API (`server/ai_service.py`), broadcasting the summary (`AI_SUMMARY_RES`) to all participants in that room.
+- **B1 [AI Summary]:** Server stores per-room chat history in memory and summarizes the conversation on request (`AI_SUMMARY_REQ`) using Google Gemini REST API (`server/ai_service.py`), broadcasting the summary (`AI_SUMMARY_RES`) to all participants in that room, with offline heuristic fallback when API key is unset.
 - **B2 [Cloud VPS Deployment]:** Server binds to `0.0.0.0` on a Cloud VPS with an open TCP firewall port so clients on any network can connect via the VPS Public IP.
 - **B3 [Typing Indicator]:** Discord-style real-time `"<user> is typing..."` status bar (`TYPING`) in both Private and Group chat rooms, with automatic debounce/timeout after 3 seconds of inactivity or upon sending a message.
 - **B4 [Voice Message]:** Push-to-talk / recorded `.wav` audio clips (`client/audio.py`) encoded in Base64 (`VOICE_MSG`) and sent over the same TCP JSON connection for playback inside Private and Group chat rooms.
@@ -45,22 +45,20 @@
 - **Frontend (Client GUI):** Python `tkinter` & `tkinter.ttk`
   - **Login Window (`client/gui_login.py`):** Server IP (LAN or Cloud VPS Public IP), Port, and unique Username input.
   - **Main Lobby (`client/gui_lobby.py`):** Displays online clients (`R4`) and all groups with member lists (`R9`), plus controls to open Private Chats (`R5`), Create Group (`R8`), and Join Group (`R10`).
-  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), Typing Indicator status bar (`B3`), AI Summary trigger (`B1`), and Voice Message recorder/player (`B4`).
+  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), Typing Indicator status bar (`B3`), and Voice Message recorder/player (`B4`).
   - **Audio Helper (`client/audio.py`):** Records/plays short `.wav` voice clips and converts between raw audio bytes and Base64 strings (`B4`).
 - **Backend (Server):** Python `socket` + `threading`
   - One main listening thread accepting connections (`server/server.py`).
-  - Thread-safe state store protected by `threading.Lock` (`server/state.py`), maintaining active clients, groups, and per-room message history for AI summarization.
+  - Thread-safe state store protected by `threading.Lock` (`server/state.py`), maintaining active clients, groups, and bounded per-room message history for AI summarization.
   - Dedicated worker thread per connected client (`server/client_handler.py`).
   - Modular Handlers (`server/handlers/`):
     - `register.py`: Client registration (`R3`) & client directory broadcast (`R4`).
-    - `private_msg.py`: 1-on-1 private messaging (`R7`).
-    - `group.py`: Group creation (`R8`), directory broadcast (`R9`), self-join (`R10`), and group multicast (`R11`).
+    - `private_msg.py`: 1-on-1 private messaging (`R7`) & history recording (`B1`).
+    - `group.py`: Group creation (`R8`), directory broadcast (`R9`), self-join (`R10`), group multicast (`R11`), & history recording (`B1`).
     - `typing.py`: Real-time typing indicator relay for private & group chats (`B3`).
-<<<<<<< HEAD
     - `audio.py`: Push-to-talk Base64 voice message relay for private & group chats (`B4`).
-=======
->>>>>>> origin/main
-  - Server-side AI Summarizer (`server/ai_service.py`) calling an LLM HTTP API via `urllib.request` so clients do not need local API keys (`B1`).
+    - `ai_summary.py`: Asynchronous AI chat summarization handler for private & group rooms (`B1`).
+  - Server-side AI Summarizer (`server/ai_service.py`) calling Gemini REST API via `urllib.request` with `.env` loader (`load_env_file`) and offline fallback.
 - **Directory Structure:**
   ```text
   CompNetwork/
@@ -72,6 +70,7 @@
   ├── Dockerfile                 # Server-only container image (python:3.12-slim, port 5000) (B2)
   ├── docker-compose.yml         # One-command server deployment & auto-restart config (B2)
   ├── .dockerignore              # Excludes client GUI, tests, and docs from server image (B2)
+  ├── .env.example               # Template environment configuration (GEMINI_API_KEY)
   ├── common/
   │   ├── __init__.py
   │   └── protocol.py            # Shared JSON message types, schemas & TCP framing specs (R1, R2, B1, B3, B4)
@@ -84,55 +83,25 @@
   │   │   ├── __init__.py        # Exported handler functions
   │   │   ├── register.py        # handle_register & broadcast_client_list (R3, R4)
   │   │   ├── private_msg.py     # handle_private_msg (R7)
-  │   │   ├── group.py           # handle_create_group, handle_join_group, handle_group_msg, broadcast_group_list (R8-R11)
-<<<<<<< HEAD
+  │   │   ├── group.py           # handle_create_group, handle_join_group, handle_group_msg (R8-R11)
   │   │   ├── typing.py          # handle_typing real-time typing indicator relay (B3)
-  │   │   └── audio.py           # handle_voice_msg push-to-talk audio relay (B4)
-=======
-  │   │   └── typing.py          # handle_typing real-time typing indicator relay (B3)
->>>>>>> origin/main
-  │   └── ai_service.py          # LLM API integration for summarizing room chat history (B1)
+  │   │   ├── audio.py           # handle_voice_msg push-to-talk audio relay (B4)
+  │   │   └── ai_summary.py      # handle_ai_summary async AI summarizer (B1)
+  │   └── ai_service.py          # Zero-dependency Gemini API & offline heuristic summarizer (B1)
   ├── client/
   │   ├── __init__.py
   │   ├── main.py                # Client application entry point & UI controller
   │   ├── network.py             # Client TCP socket thread & thread-safe UI queue (R2, B1, B3, B4)
   │   ├── audio.py               # WAV voice clip recording, playback & Base64 encoding/decoding (B4)
   │   ├── gui_login.py           # Login dialog for Server IP (LAN/VPS), port & unique username (R1, R3, B2)
-  │   ├── gui_lobby.py           # Main lobby showing client list & group list (R4, R8, R9, R10)
-  │   └── gui_chatroom.py        # Separate Toplevel window per Private/Group room (R5–R7, R11, B1, B3, B4)
+  │   ├── gui_lobby.py           # Lobby window for online client directory & group directory (R4, R8-R10)
+  │   └── gui_chatroom.py        # Dedicated chat room window per peer/group (R5, R6, B3, B4)
   └── tests/
-      ├── test_socket_r2.py      # R2 raw TCP JSON request/response test
-      ├── test_handler_register.py # R3 & R4 registration & directory test
-      ├── test_messaging.py      # R7-R11 private & group messaging tests
-<<<<<<< HEAD
-      ├── test_typing.py         # B3 real-time typing indicator tests
-      └── test_audio.py          # B4 push-to-talk voice relay tests
-=======
-      └── test_typing.py         # B3 private, group, offline & non-member typing indicator tests
->>>>>>> origin/main
+      ├── test_socket_r2.py
+      ├── test_handler_register.py
+      ├── test_messaging.py
+      ├── test_client_requirements.py
+      ├── test_typing.py
+      ├── test_audio.py
+      └── test_ai_summary.py
   ```
-
----
-
-## 4. Current Status & Health
-<<<<<<< HEAD
-- **Overall Health:** Green (Server Core Handlers R3–R11 + Bonus B3 Typing + Bonus B4 Voice Relay Implemented and Verified with 29 passing Unit Tests).
-=======
-- **Overall Health:** Green (Server Core Handlers R3–R11 + Bonus B3 Typing Handler Implemented and Verified with 11 passing Unit Tests).
->>>>>>> origin/main
-- **What is Working:**
-  - `common/protocol.py`: Framing, serialization, `send_packet`, `SocketLineBuffer`.
-  - `server/state.py`: Thread-safe client and group registry.
-  - `server/handlers/register.py`: R3, R4.
-  - `server/handlers/private_msg.py`: R7.
-  - `server/handlers/group.py`: R8, R9, R10, R11.
-  - `server/handlers/typing.py`: B3 real-time typing indicator relay.
-<<<<<<< HEAD
-  - `server/handlers/audio.py`: B4 push-to-talk Base64 audio relay.
-=======
->>>>>>> origin/main
-  - `server/client_handler.py`: Full modular routing and disconnect cleanups.
-- **Pending Implementation:**
-  - Client Network Layer (`client/network.py`).
-  - Client GUI (`gui_login.py`, `gui_lobby.py`, `gui_chatroom.py`).
-  - Bonus Features (`B1` AI Summary).

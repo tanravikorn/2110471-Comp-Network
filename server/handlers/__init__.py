@@ -3,6 +3,7 @@ Package: server.handlers
 Purpose: Modular Action Handlers for Computer Networks Chat Server
 """
 
+from server.handlers.ai_summary import handle_ai_summary
 from server.handlers.audio import handle_voice_msg
 from server.handlers.group import (
     broadcast_group_list,
@@ -24,4 +25,5 @@ __all__ = [
     "handle_group_msg",
     "handle_typing",
     "handle_voice_msg",
+    "handle_ai_summary",
 ]

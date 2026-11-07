@@ -11,8 +11,11 @@ Mapped Requirements:
 
 import json
 import socket
+import threading
 from datetime import datetime
 from typing import Any, Dict, Generator, Optional, Union
+
+_send_lock = threading.Lock()
 
 # ==============================================================================
 # 1. Network & Framing Constants (R1, R2)
@@ -21,7 +24,8 @@ DEFAULT_HOST: str = "0.0.0.0"   # Bind to all network interfaces (LAN / Cloud VP
 DEFAULT_PORT: int = 5000        # Default TCP port for chat server
 ENCODING: str = "utf-8"         # Standard character encoding for all network packets
 DELIMITER: str = "\n"           # Stream frame delimiter (newline separates JSON packets)
-BUFFER_SIZE: int = 16384        # Chunk size for socket recv (16KB handles voice base64 smoothly)
+BUFFER_SIZE: str | int = 16384  # Chunk size for socket recv (16KB handles voice base64 smoothly)
+MAX_FRAME_BUFFER_BYTES: int = 10 * 1024 * 1024  # 10MB ceiling to prevent buffer overflow/OOM on VPS
 
 # ==============================================================================
 # 2. Standard JSON Envelope Keys & Room Type Constants
@@ -130,8 +134,10 @@ def encode_message(msg_or_type: Union[str, Dict[str, Any]], payload: Optional[Di
 
 def send_packet(sock: socket.socket, msg_type: str, payload: Optional[Dict[str, Any]] = None) -> bool:
     """Helper to encode and transmit a JSON packet over raw TCP socket."""
+    data = encode_message(msg_type, payload or {})
     try:
-        sock.sendall(encode_message(msg_type, payload or {}))
+        with _send_lock:
+            sock.sendall(data)
         return True
     except (OSError, ConnectionError):
         return False
@@ -197,6 +203,8 @@ class SocketLineBuffer:
             if not chunk:
                 raise EOFError("TCP socket connection closed by peer")
             self._buffer += chunk.decode(ENCODING, errors="replace")
+            if len(self._buffer) > MAX_FRAME_BUFFER_BYTES:
+                raise ValueError(f"Stream frame buffer exceeded maximum limit ({len(self._buffer)} bytes)")
 
     def __iter__(self) -> Generator[Dict[str, Any], None, None]:
         """Allows iterating over incoming messages until socket disconnection."""
