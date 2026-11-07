@@ -4,6 +4,8 @@ Purpose: Per-Client TCP Socket Connection & Request Router
 Mapped Requirements:
   - R2 (TCP Socket Stream): Receives newline-delimited JSON packets via SocketLineBuffer.
   - R3–R11: Routes actions to modular handlers in server/handlers/.
+  - B3 (Typing Indicator): Routes MSG_TYPING to handle_typing.
+  - B4 (Voice Message): Routes MSG_VOICE_MSG to handle_voice_msg.
 """
 
 import logging
@@ -22,6 +24,7 @@ from common.protocol import (
     MSG_PRIVATE,
     MSG_REGISTER,
     MSG_TYPING,
+    MSG_VOICE_MSG,
     SocketLineBuffer,
     build_message,
     send_packet,
@@ -35,6 +38,7 @@ from server.handlers import (
     handle_private_msg,
     handle_register,
     handle_typing,
+    handle_voice_msg,
 )
 from server.state import ServerState
 
@@ -99,7 +103,11 @@ def handle_client(
             elif msg_type == MSG_TYPING:
                 handle_typing(client_sock, payload, state, session)
 
-            # 7. Fallback / Future Actions
+            # 7. Push-to-Talk Voice Message (B4)
+            elif msg_type == MSG_VOICE_MSG:
+                handle_voice_msg(client_sock, payload, state, session)
+
+            # 8. Fallback / Future Actions
             else:
                 response = build_message(
                     msg_type="RESPONSE",

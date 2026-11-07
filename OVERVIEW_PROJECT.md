@@ -1,8 +1,8 @@
 # Project Overview & Single Source of Truth
 
 > **Document Status:** Active
-> **Last Synchronized:** 2026-11-06
-> **Current Sprint / Phase:** Phase 2 - Modular Server Handlers (R3–R11) Completed & 100% Tested
+> **Last Synchronized:** 2026-11-08
+> **Current Sprint / Phase:** Phase 2 & Bonus B3 Typing + Bonus B4 Voice Relay Handlers Completed & 100% Tested (29/29 Tests Passing)
 
 ---
 
@@ -55,6 +55,8 @@
     - `register.py`: Client registration (`R3`) & client directory broadcast (`R4`).
     - `private_msg.py`: 1-on-1 private messaging (`R7`).
     - `group.py`: Group creation (`R8`), directory broadcast (`R9`), self-join (`R10`), and group multicast (`R11`).
+    - `typing.py`: Real-time typing indicator relay for private & group chats (`B3`).
+    - `audio.py`: Push-to-talk Base64 voice message relay for private & group chats (`B4`).
   - Server-side AI Summarizer (`server/ai_service.py`) calling an LLM HTTP API via `urllib.request` so clients do not need local API keys (`B1`).
 - **Directory Structure:**
   ```text
@@ -75,7 +77,9 @@
   │   │   ├── __init__.py        # Exported handler functions
   │   │   ├── register.py        # handle_register & broadcast_client_list (R3, R4)
   │   │   ├── private_msg.py     # handle_private_msg (R7)
-  │   │   └── group.py           # handle_create_group, handle_join_group, handle_group_msg, broadcast_group_list (R8-R11)
+  │   │   ├── group.py           # handle_create_group, handle_join_group, handle_group_msg, broadcast_group_list (R8-R11)
+  │   │   ├── typing.py          # handle_typing real-time typing indicator relay (B3)
+  │   │   └── audio.py           # handle_voice_msg push-to-talk audio relay (B4)
   │   └── ai_service.py          # LLM API integration for summarizing room chat history (B1)
   ├── client/
   │   ├── __init__.py
@@ -88,21 +92,25 @@
   └── tests/
       ├── test_socket_r2.py      # R2 raw TCP JSON request/response test
       ├── test_handler_register.py # R3 & R4 registration & directory test
-      └── test_messaging.py      # R7-R11 private & group messaging tests
+      ├── test_messaging.py      # R7-R11 private & group messaging tests
+      ├── test_typing.py         # B3 real-time typing indicator tests
+      └── test_audio.py          # B4 push-to-talk voice relay tests
   ```
 
 ---
 
 ## 4. Current Status & Health
-- **Overall Health:** Green (Server Core Handlers R3–R11 Fully Implemented and Verified with 7 passing Unit Tests).
+- **Overall Health:** Green (Server Core Handlers R3–R11 + Bonus B3 Typing + Bonus B4 Voice Relay Implemented and Verified with 29 passing Unit Tests).
 - **What is Working:**
-  - `common/protocol.py`: Framing, serialization, `SocketLineBuffer`.
+  - `common/protocol.py`: Framing, serialization, `send_packet`, `SocketLineBuffer`.
   - `server/state.py`: Thread-safe client and group registry.
   - `server/handlers/register.py`: R3, R4.
   - `server/handlers/private_msg.py`: R7.
   - `server/handlers/group.py`: R8, R9, R10, R11.
+  - `server/handlers/typing.py`: B3 real-time typing indicator relay.
+  - `server/handlers/audio.py`: B4 push-to-talk Base64 audio relay.
   - `server/client_handler.py`: Full modular routing and disconnect cleanups.
 - **Pending Implementation:**
   - Client Network Layer (`client/network.py`).
   - Client GUI (`gui_login.py`, `gui_lobby.py`, `gui_chatroom.py`).
-  - Bonus Features (`B1` AI Summary, `B3` Typing Indicator, `B4` Voice Message).
+  - Bonus Features (`B1` AI Summary).

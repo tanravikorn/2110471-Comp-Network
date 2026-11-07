@@ -3,6 +3,7 @@ Package: server.handlers
 Purpose: Modular Action Handlers for Computer Networks Chat Server
 """
 
+from server.handlers.audio import handle_voice_msg
 from server.handlers.group import (
     broadcast_group_list,
     handle_create_group,
@@ -22,4 +23,5 @@ __all__ = [
     "handle_join_group",
     "handle_group_msg",
     "handle_typing",
+    "handle_voice_msg",
 ]
