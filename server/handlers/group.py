@@ -6,6 +6,7 @@ Mapped Requirements:
   - R9 (Group List Directory): Broadcasts all groups and member lists to all clients.
   - R10 (Self-Join Group): Allows users to explicitly join existing groups.
   - R11 (Group Chat Routing): Multicasts messages only to members of the target group.
+  - B1 (AI Summary History): Records successful messages into room history.
 """
 
 import logging
@@ -20,9 +21,10 @@ from common.protocol import (
     MSG_ERROR,
     MSG_GROUP,
     MSG_GROUP_LIST,
+    get_current_timestamp,
     send_packet,
 )
-from server.state import ServerState
+from server.state import ServerState, get_group_room_key
 
 logger = logging.getLogger("server.handlers.group")
 
@@ -99,6 +101,7 @@ def handle_group_msg(
     """
     Multicasts group message only to joined members (R11).
     Rejects non-members with ERR_NOT_IN_GROUP.
+    Records message to ServerState room history (B1).
     """
     group_name = str(payload.get("group", "")).strip()
     text = str(payload.get("text", "")).strip()
@@ -122,9 +125,14 @@ def handle_group_msg(
         "text": text,
     }
 
-    # Multicast to all members in group (including sender)
+    # 1. Multicast to all members in group (including sender)
     for sock in member_socks:
         send_packet(sock, MSG_GROUP, msg_payload)
+
+    # 2. Record in room history for AI Summarization (B1)
+    timestamp = get_current_timestamp()
+    room_key = get_group_room_key(group_name)
+    state.record_message(room_key, sender, text, timestamp)
 
     logger.info(f"Group message in '{group_name}' from '{sender}' sent to {len(member_socks)} members")
     return True

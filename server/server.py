@@ -9,6 +9,7 @@ Mapped Requirements:
 
 import argparse
 import logging
+import signal
 import socket
 import sys
 import threading
@@ -63,9 +64,21 @@ def start_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, state: Opti
     logger.info("   Ready to accept client connections...")
     logger.info("=" * 60)
 
+    # Graceful shutdown on Docker / Linux SIGTERM
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    except (ValueError, AttributeError):
+        pass
+
     try:
         while True:
             client_sock, client_addr = server_sock.accept()
+            # Enable TCP Keepalive to detect dead/silent client drops on VPS (Must Fix 1)
+            try:
+                client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            except OSError:
+                pass
+
             worker_thread = threading.Thread(
                 target=handle_client,
                 args=(client_sock, client_addr, state),
@@ -73,8 +86,8 @@ def start_server(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, state: Opti
                 daemon=True,
             )
             worker_thread.start()
-    except KeyboardInterrupt:
-        logger.info("\nServer shutdown requested by user (Ctrl+C). Cleaning up sockets...")
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("\nServer shutdown requested. Cleaning up sockets...")
     finally:
         try:
             server_sock.close()

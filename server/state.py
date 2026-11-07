@@ -13,7 +13,18 @@ Mapped Requirements:
 
 import socket
 import threading
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+def get_private_room_key(user1: str, user2: str) -> str:
+    """Returns canonical room key for 1-on-1 private chat."""
+    u1, u2 = sorted([user1.strip(), user2.strip()])
+    return f"PRIVATE:{u1}:{u2}"
+
+
+def get_group_room_key(group_name: str) -> str:
+    """Returns canonical room key for group chat."""
+    return f"GROUP:{group_name.strip()}"
 
 
 class ServerState:
@@ -21,6 +32,7 @@ class ServerState:
     Central thread-safe registry managing:
       - Active client sockets mapped to unique usernames (R3, R4, R7)
       - Chat groups and member sets (R8, R9, R10, R11)
+      - In-memory message history per room for AI summarization (B1)
       - Thread synchronization using threading.Lock()
     """
 
@@ -30,6 +42,10 @@ class ServerState:
         self.clients: Dict[str, socket.socket] = {}
         # group_name -> set of member usernames
         self.groups: Dict[str, Set[str]] = {}
+        # room_key -> list of {"timestamp": str, "sender": str, "text": str}
+        self.room_history: Dict[str, List[Dict[str, Any]]] = {}
+        # room_keys with an AI summary request currently in flight
+        self.summarizing_rooms: Set[str] = set()
 
     # ==========================================================================
     # 1. Client Registration & Directory (R3, R4, R7)
@@ -129,3 +145,48 @@ class ServerState:
                 if sock:
                     sockets.append(sock)
             return sockets
+
+    # ==========================================================================
+    # 3. Chat History & AI Summarization Storage (B1)
+    # ==========================================================================
+    def record_message(
+        self,
+        room_key: str,
+        sender: str,
+        text: str,
+        timestamp: str,
+        max_history: int = 50,
+    ) -> None:
+        """
+        Stores a chat message record in room_history with a sliding window limit (B1).
+        """
+        with self.lock:
+            if room_key not in self.room_history:
+                self.room_history[room_key] = []
+            self.room_history[room_key].append({
+                "timestamp": timestamp,
+                "sender": sender,
+                "text": text,
+            })
+            if len(self.room_history[room_key]) > max_history:
+                self.room_history[room_key] = self.room_history[room_key][-max_history:]
+
+    def get_room_history(self, room_key: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves a shallow copy of the recorded message history for a given room (B1).
+        """
+        with self.lock:
+            return list(self.room_history.get(room_key, []))
+
+    def try_acquire_summary(self, room_key: str) -> bool:
+        """Marks room_key as having an in-flight summary; returns False if already running."""
+        with self.lock:
+            if room_key in self.summarizing_rooms:
+                return False
+            self.summarizing_rooms.add(room_key)
+            return True
+
+    def release_summary(self, room_key: str) -> None:
+        """Clears the in-flight summary lock for room_key."""
+        with self.lock:
+            self.summarizing_rooms.discard(room_key)
