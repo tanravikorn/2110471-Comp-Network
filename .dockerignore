@@ -1,0 +1,15 @@
+# Ignore git, caches, virtual environments
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Ignore client GUI, unit tests, and docs (Server-only container)
+client/
+tests/
+*.md
+.gemini/
