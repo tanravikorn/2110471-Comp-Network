@@ -11,6 +11,7 @@ from server.handlers.group import (
 )
 from server.handlers.private_msg import handle_private_msg
 from server.handlers.register import broadcast_client_list, handle_register
+from server.handlers.typing import handle_typing
 
 __all__ = [
     "broadcast_client_list",
@@ -20,4 +21,5 @@ __all__ = [
     "handle_create_group",
     "handle_join_group",
     "handle_group_msg",
+    "handle_typing",
 ]

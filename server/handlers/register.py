@@ -13,20 +13,11 @@ from typing import Any, Dict
 from common.protocol import (
     MSG_CLIENT_LIST,
     MSG_REGISTER_ACK,
-    encode_message,
+    send_packet,
 )
 from server.state import ServerState
 
 logger = logging.getLogger("server.handlers.register")
-
-
-def send_packet(sock: socket.socket, msg_type: str, payload: Dict[str, Any]) -> bool:
-    """Helper to encode and transmit a JSON packet over raw TCP socket."""
-    try:
-        sock.sendall(encode_message(msg_type, payload))
-        return True
-    except (OSError, ConnectionError):
-        return False
 
 
 def broadcast_client_list(state: ServerState) -> None:
