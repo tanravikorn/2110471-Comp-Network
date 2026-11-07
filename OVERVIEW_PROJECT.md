@@ -1,8 +1,8 @@
 # Project Overview & Single Source of Truth
 
 > **Document Status:** Active
-> **Last Synchronized:** 2026-11-06
-> **Current Sprint / Phase:** Phase 2 - Modular Server Handlers (R3–R11) Completed & 100% Tested
+> **Last Synchronized:** 2026-11-07
+> **Current Sprint / Phase:** Phase 2 & Bonus B3 Server Handler Completed & 100% Tested (11/11 Tests Passing)
 
 ---
 
@@ -55,6 +55,7 @@
     - `register.py`: Client registration (`R3`) & client directory broadcast (`R4`).
     - `private_msg.py`: 1-on-1 private messaging (`R7`).
     - `group.py`: Group creation (`R8`), directory broadcast (`R9`), self-join (`R10`), and group multicast (`R11`).
+    - `typing.py`: Real-time typing indicator relay for private & group chats (`B3`).
   - Server-side AI Summarizer (`server/ai_service.py`) calling an LLM HTTP API via `urllib.request` so clients do not need local API keys (`B1`).
 - **Directory Structure:**
   ```text
@@ -62,7 +63,11 @@
   ├── GEMINI.md                  # Workspace rules & directives
   ├── OVERVIEW_PROJECT.md        # Single Source of Truth architecture & specs
   ├── SESSION_STATE.md           # Session progress & handoff state
+  ├── README.md                  # Server setup guide (Docker Desktop, Cloud VPS & Python 3)
   ├── JsonFormat.md              # Full wire protocol reference
+  ├── Dockerfile                 # Server-only container image (python:3.12-slim, port 5000) (B2)
+  ├── docker-compose.yml         # One-command server deployment & auto-restart config (B2)
+  ├── .dockerignore              # Excludes client GUI, tests, and docs from server image (B2)
   ├── common/
   │   ├── __init__.py
   │   └── protocol.py            # Shared JSON message types, schemas & TCP framing specs (R1, R2, B1, B3, B4)
@@ -75,7 +80,8 @@
   │   │   ├── __init__.py        # Exported handler functions
   │   │   ├── register.py        # handle_register & broadcast_client_list (R3, R4)
   │   │   ├── private_msg.py     # handle_private_msg (R7)
-  │   │   └── group.py           # handle_create_group, handle_join_group, handle_group_msg, broadcast_group_list (R8-R11)
+  │   │   ├── group.py           # handle_create_group, handle_join_group, handle_group_msg, broadcast_group_list (R8-R11)
+  │   │   └── typing.py          # handle_typing real-time typing indicator relay (B3)
   │   └── ai_service.py          # LLM API integration for summarizing room chat history (B1)
   ├── client/
   │   ├── __init__.py
@@ -88,19 +94,21 @@
   └── tests/
       ├── test_socket_r2.py      # R2 raw TCP JSON request/response test
       ├── test_handler_register.py # R3 & R4 registration & directory test
-      └── test_messaging.py      # R7-R11 private & group messaging tests
+      ├── test_messaging.py      # R7-R11 private & group messaging tests
+      └── test_typing.py         # B3 private, group, offline & non-member typing indicator tests
   ```
 
 ---
 
 ## 4. Current Status & Health
-- **Overall Health:** Green (Server Core Handlers R3–R11 Fully Implemented and Verified with 7 passing Unit Tests).
+- **Overall Health:** Green (Server Core Handlers R3–R11 + Bonus B3 Typing Handler Implemented and Verified with 11 passing Unit Tests).
 - **What is Working:**
-  - `common/protocol.py`: Framing, serialization, `SocketLineBuffer`.
+  - `common/protocol.py`: Framing, serialization, `send_packet`, `SocketLineBuffer`.
   - `server/state.py`: Thread-safe client and group registry.
   - `server/handlers/register.py`: R3, R4.
   - `server/handlers/private_msg.py`: R7.
   - `server/handlers/group.py`: R8, R9, R10, R11.
+  - `server/handlers/typing.py`: B3 real-time typing indicator relay.
   - `server/client_handler.py`: Full modular routing and disconnect cleanups.
 - **Pending Implementation:**
   - Client Network Layer (`client/network.py`).
