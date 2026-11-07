@@ -21,9 +21,10 @@ from common.protocol import (
     MSG_JOIN_GROUP,
     MSG_PRIVATE,
     MSG_REGISTER,
+    MSG_TYPING,
     SocketLineBuffer,
     build_message,
-    encode_message,
+    send_packet,
 )
 from server.handlers import (
     broadcast_client_list,
@@ -33,20 +34,11 @@ from server.handlers import (
     handle_join_group,
     handle_private_msg,
     handle_register,
+    handle_typing,
 )
 from server.state import ServerState
 
 logger = logging.getLogger("server.client_handler")
-
-
-def send_packet(sock: socket.socket, msg_type: str, payload: Optional[Dict[str, Any]] = None) -> bool:
-    """Helper to encode and transmit a JSON packet over raw TCP socket."""
-    try:
-        wire_bytes = encode_message(msg_type, payload or {})
-        sock.sendall(wire_bytes)
-        return True
-    except (OSError, ConnectionError):
-        return False
 
 
 def handle_client(
@@ -103,7 +95,11 @@ def handle_client(
             elif msg_type == MSG_GROUP:
                 handle_group_msg(client_sock, payload, state, session)
 
-            # 6. Fallback / Future Actions
+            # 6. Real-Time Typing Indicator (B3)
+            elif msg_type == MSG_TYPING:
+                handle_typing(client_sock, payload, state, session)
+
+            # 7. Fallback / Future Actions
             else:
                 response = build_message(
                     msg_type="RESPONSE",

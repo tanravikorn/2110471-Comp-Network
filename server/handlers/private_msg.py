@@ -14,20 +14,11 @@ from common.protocol import (
     ERR_USER_NOT_FOUND,
     MSG_ERROR,
     MSG_PRIVATE,
-    encode_message,
+    send_packet,
 )
 from server.state import ServerState
 
 logger = logging.getLogger("server.handlers.private_msg")
-
-
-def send_packet(sock: socket.socket, msg_type: str, payload: Dict[str, Any]) -> bool:
-    """Helper to encode and transmit a JSON packet over raw TCP socket."""
-    try:
-        sock.sendall(encode_message(msg_type, payload))
-        return True
-    except (OSError, ConnectionError):
-        return False
 
 
 def handle_private_msg(

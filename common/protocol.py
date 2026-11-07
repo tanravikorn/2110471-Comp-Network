@@ -128,6 +128,15 @@ def encode_message(msg_or_type: Union[str, Dict[str, Any]], payload: Optional[Di
     return (json_str + DELIMITER).encode(ENCODING)
 
 
+def send_packet(sock: socket.socket, msg_type: str, payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Helper to encode and transmit a JSON packet over raw TCP socket."""
+    try:
+        sock.sendall(encode_message(msg_type, payload or {}))
+        return True
+    except (OSError, ConnectionError):
+        return False
+
+
 def decode_message(raw_line: str) -> Dict[str, Any]:
     """
     Parses a single newline-stripped JSON string and validates standard envelope structure.
