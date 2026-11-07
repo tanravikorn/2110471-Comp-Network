@@ -6,79 +6,122 @@ Mapped Requirements:
     explicitly including the client's own name (e.g., `"Alice (You)"`).
   - R5 (Separate Chat Rooms): Opens and manages dedicated `ChatRoomWindow` (`tk.Toplevel`)
     instances for each Private chat peer and each joined Group chat.
+  - R6 (Chat Box & Chat Window): Integrates with `ChatRoomWindow` for message display and sending.
   - R8 (Create Group): Provides UI input/button to create a new chat group (creator is sole initial member).
   - R9 (Group List with Members): Displays all existing chat groups created by any client,
     along with each group's current member list.
   - R10 (Self-Join Group): Provides a "Join Group" button allowing the client to join a selected
     group by themselves (never added automatically by the creator).
-  - B1, B3, B4 (Bonus Routing): Dispatches incoming `TYPING`, `AI_SUMMARY_RES`, and `VOICE_MSG`
-    packets to the appropriate open `ChatRoomWindow`.
 """
 
-# ==============================================================================
-# TODO 1: Define `LobbyWindow` Layout & State
-# ==============================================================================
-# - State dictionaries to track open chat room windows (R5):
-#     - `self.private_rooms: dict[str, ChatRoomWindow] = {}`  # maps peer_username -> ChatRoomWindow
-#     - `self.group_rooms: dict[str, ChatRoomWindow] = {}`    # maps group_name -> ChatRoomWindow
-#     - `self.groups_data: dict[str, list[str]] = {}`         # latest group -> member list mapping (R9)
-#
-# - Left Panel — Connected Clients (R4, R5, R7):
-#     - Header label showing own username.
-#     - `tk.Listbox` or `ttk.Treeview` listing all connected clients (including own name, R4).
-#     - "Open Private Chat" button (or double-click binding) to open/focus the 1-to-1
-#       `ChatRoomWindow` with the selected peer (R5, R7).
-#
-# - Right Panel — Chat Groups & Member Lists (R8, R9, R10, R11):
-#     - `ttk.Treeview` or `tk.Listbox` showing every existing group name AND its member list (R9).
-#     - Entry + "Create Group" button: sends `MSG_CREATE_GROUP` to server (R8).
-#     - "Join Selected Group" button: sends `MSG_JOIN_GROUP` for the selected group so the client
-#       joins by themselves (R10).
-#     - "Open Group Chat" button: if the client is a member of the selected group, opens/focuses
-#       the group's `ChatRoomWindow` (R5, R11).
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import tkinter as tk
+from tkinter import messagebox, ttk
+from typing import Any, Callable, Dict, List, Optional
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from client.gui_chatroom import ChatRoomWindow
+from common.protocol import (
+    MSG_CLIENT_LIST,
+    MSG_CREATE_GROUP,
+    MSG_ERROR,
+    MSG_GROUP,
+    MSG_GROUP_LIST,
+    MSG_JOIN_GROUP,
+    MSG_PRIVATE,
+    ROOM_GROUP,
+    ROOM_PRIVATE,
+)
+
 
 # ==============================================================================
-# TODO 2: Implement Queue Polling & Incoming Envelope Dispatcher (`poll_incoming_queue`)
+# R5 / R6 Chat Room Lifecycle & Dispatch Hooks
 # ==============================================================================
-# - Schedule `self.root.after(100, self.poll_incoming_queue)` to process envelopes from `network_client.incoming_queue`:
-#   Each incoming `msg` has top-level keys `msg["type"]`, `msg["timestamp"]`, and `msg["payload"]`:
-#     - `MSG_CLIENT_LIST` (R4):
-#         Extract `clients = msg["payload"]["clients"]`.
-#         Refresh the Connected Clients list UI, ensuring own username is included.
-#     - `MSG_GROUP_LIST` (R8, R9, R10):
-#         Extract `self.groups_data = msg["payload"]["groups"]` (dict of `group_name -> list[str]`).
-#         Refresh the Groups + Member Lists UI in the lobby.
-#         Also update member list header in any open `self.group_rooms`.
-#     - `MSG_PRIVATE` (R5, R6, R7):
-#         Extract `sender = msg["payload"]["from"]`, `target = msg["payload"]["to"]`, `text = msg["payload"]["text"]`,
-#         and `timestamp = msg["timestamp"]`.
-#         Determine the conversation peer (`target` if `sender == self.own_username` via Server Echo, else `sender`).
-#         If `self.private_rooms[peer]` is not open yet, automatically create/open its `ChatRoomWindow` (R5).
-#         Call `room.append_message(sender, text, timestamp)` on that room's chat display window (R6).
-#     - `MSG_GROUP` (R5, R6, R11):
-#         Extract `group = msg["payload"]["group"]`, `sender = msg["payload"]["from"]`, `text = msg["payload"]["text"]`,
-#         and `timestamp = msg["timestamp"]`.
-#         If `self.group_rooms[group]` is not open yet, create/open its `ChatRoomWindow` (R5).
-#         Call `room.append_message(sender, text, timestamp)` on that group room's chat display window (R6).
-#     - `MSG_TYPING` (B3 — Discord-style Typing Indicator):
-#         Extract `room_type = msg["payload"]["room_type"]`, `target = msg["payload"]["target"]`,
-#         `sender = msg["payload"]["from"]`, and `is_typing = msg["payload"]["is_typing"]`.
-#         Locate the open `ChatRoomWindow` (`self.private_rooms.get(sender)` if `"PRIVATE"`,
-#         or `self.group_rooms.get(target)` if `"GROUP"`).
-#         If the room window is open, call `room.update_typing_status(sender, is_typing)`.
-#     - `MSG_AI_SUMMARY_RES` (B1 — Broadcast AI Summary Result):
-#         Extract `room_type = msg["payload"]["room_type"]`, `target = msg["payload"]["target"]`,
-#         `requested_by = msg["payload"]["requested_by"]`, `summary = msg["payload"]["summary"]`,
-#         and `timestamp = msg["timestamp"]`.
-#         Locate or open the corresponding `ChatRoomWindow` and call
-#         `room.append_ai_summary(requested_by, summary, timestamp)`.
-#     - `MSG_VOICE_MSG` (B4 — Voice Clip Message):
-#         Extract `room_type = msg["payload"]["room_type"]`, `target = msg["payload"]["target"]`,
-#         `sender = msg["payload"]["from"]`, `audio_b64 = msg["payload"]["audio_b64"]`,
-#         `duration = msg["payload"]["duration"]`, and `timestamp = msg["timestamp"]`.
-#         Determine the room (`peer = target if sender == self.own_username else sender` for `"PRIVATE"`,
-#         or `target` for `"GROUP"`), ensure its `ChatRoomWindow` is open, and call
-#         `room.append_voice_message(sender, audio_b64, duration, timestamp)`.
-#     - `MSG_ERROR`:
-#         Extract `code = msg["payload"]["code"]` and `message = msg["payload"]["message"]`.
-#         Display warning/error messagebox to the user.
+class ChatRoomManager:
+    """
+    Helper manager that tracks and dispatches messages to dedicated ChatRoomWindow instances (R5, R6).
+    Maintains a 1-to-1 mapping of open rooms and routes incoming server envelopes seamlessly.
+    """
+
+    def __init__(self, parent: tk.Misc, own_username: str, network_client: Any = None) -> None:
+        self.parent = parent
+        self.own_username = own_username
+        self.network_client = network_client
+        self.private_rooms: Dict[str, ChatRoomWindow] = {}
+        self.group_rooms: Dict[str, ChatRoomWindow] = {}
+
+    def get_or_create_private_room(self, peer_username: str) -> ChatRoomWindow:
+        """Retrieves an existing private chat room or opens a dedicated new one (R5)."""
+        if peer_username in self.private_rooms:
+            room = self.private_rooms[peer_username]
+            if room.winfo_exists():
+                room.bring_to_front()
+                return room
+
+        room = ChatRoomWindow(
+            parent=self.parent,
+            room_type=ROOM_PRIVATE,
+            target_name=peer_username,
+            own_username=self.own_username,
+            network_client=self.network_client,
+            on_close_callback=lambda _rt, target: self.private_rooms.pop(target, None),
+        )
+        self.private_rooms[peer_username] = room
+        return room
+
+    def get_or_create_group_room(self, group_name: str, members: Optional[List[str]] = None) -> ChatRoomWindow:
+        """Retrieves an existing group chat room or opens a dedicated new one (R5)."""
+        if group_name in self.group_rooms:
+            room = self.group_rooms[group_name]
+            if room.winfo_exists():
+                if members:
+                    room.set_participants(members)
+                room.bring_to_front()
+                return room
+
+        room = ChatRoomWindow(
+            parent=self.parent,
+            room_type=ROOM_GROUP,
+            target_name=group_name,
+            own_username=self.own_username,
+            network_client=self.network_client,
+            on_close_callback=lambda _rt, target: self.group_rooms.pop(target, None),
+        )
+        if members:
+            room.set_participants(members)
+        self.group_rooms[group_name] = room
+        return room
+
+    def dispatch_private_message(self, sender: str, target: str, text: str, timestamp: str = "") -> None:
+        """Routes incoming private message to the appropriate ChatRoomWindow (R5, R6)."""
+        peer = target if sender == self.own_username else sender
+        room = self.get_or_create_private_room(peer)
+        room.append_message(sender=sender, text=text, timestamp=timestamp)
+
+    def dispatch_group_message(self, group_name: str, sender: str, text: str, timestamp: str = "") -> None:
+        """Routes incoming group message to the appropriate ChatRoomWindow (R5, R6)."""
+        room = self.get_or_create_group_room(group_name)
+        room.append_message(sender=sender, text=text, timestamp=timestamp)
+
+    def close_all_rooms(self) -> None:
+        """Closes all open chat rooms cleanly upon logout/exit."""
+        for room in list(self.private_rooms.values()):
+            try:
+                room.destroy()
+            except Exception:
+                pass
+        self.private_rooms.clear()
+
+        for room in list(self.group_rooms.values()):
+            try:
+                room.destroy()
+            except Exception:
+                pass
+        self.group_rooms.clear()

@@ -23,14 +23,8 @@ from common.protocol import (
 )
 
 # ==============================================================================
-# TODO 1: Define `NetworkClient` Class
+# 1. NetworkClient Class
 # ==============================================================================
-# - Attributes:
-#     - `self.sock: socket.socket | None = None`
-#     - `self.incoming_queue: queue.Queue = queue.Queue()` (thread-safe bridge to Tkinter)
-#     - `self.connected: bool = False`
-#     - `self.username: str | None = None`
-
 class NetworkClient:
     def __init__(self, incoming_queue: Optional[queue.Queue] = None):
         self.sock: Optional[socket.socket] = None
@@ -39,23 +33,9 @@ class NetworkClient:
         self.username: Optional[str] = None
         self.receive_thread: Optional[threading.Thread] = None
 
-# ==============================================================================
-# TODO 2: Implement Connection & Background Listener Thread (R1, R2, B2)
-# ==============================================================================
-# - `connect(host: str, port: int) -> tuple[bool, str]`:
-#     Create TCP socket, connect to `(host, port)` (supports LAN IP or Cloud VPS Public IP, B2),
-#     set `self.connected = True`, and spawn a daemon `threading.Thread` running `self._receive_loop()`.
-#
-# - `_receive_loop() -> None`:
-#     Continuously read newline-delimited JSON envelopes from `self.sock` using `SocketLineBuffer`
-#     from `common.protocol`.
-#     Each parsed dict has the shape: `{"type": "...", "timestamp": "HH:MM:SS", "payload": {...}}`.
-#     Push each parsed dictionary `msg` into `self.incoming_queue.put(msg)`.
-#     If the server disconnects or an exception occurs, push a disconnect event to `self.incoming_queue`.
-#
-# - `disconnect() -> None`:
-#     Close `self.sock` cleanly and set `self.connected = False`.
-
+    # ==========================================================================
+    # Connection & Background Listener Thread (R1, R2, B2)
+    # ==========================================================================
     def connect(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> Tuple[bool, str]:
         """Creates a raw TCP socket connection and launches background receiver thread (R2)."""
         try:
@@ -66,7 +46,7 @@ class NetworkClient:
             self.receive_thread.start()
             return True, "Connected successfully"
         except Exception as e:
-            self.disconnect()  
+            self.disconnect()
             return False, f"Connection failed: {e}"
 
     def _receive_loop(self) -> None:
@@ -103,43 +83,34 @@ class NetworkClient:
             self.sock.sendall(wire_data)
         except Exception:
             self.disconnect()
-            
-# ==============================================================================
-# TODO 3: Implement Fundamental Outgoing Methods (R3, R7, R8, R10, R11)
-# ==============================================================================
-# All outgoing methods call `encode_message(msg_type, payload)` from `common.protocol`
-# which wraps `payload` inside `{"type": msg_type, "timestamp": "HH:MM:SS", "payload": payload}\n`:
-#
-# - `send_register(username: str) -> None`:
-#     Send `MSG_REGISTER` with payload `{"username": username}` (R3).
-#
-# - `send_private_message(target_user: str, text: str) -> None`:
-#     Send `MSG_PRIVATE` with payload `{"to": target_user, "text": text}` (R7).
-#
-# - `send_create_group(group_name: str) -> None`:
-#     Send `MSG_CREATE_GROUP` with payload `{"group": group_name}` (R8).
-#
-# - `send_join_group(group_name: str) -> None`:
-#     Send `MSG_JOIN_GROUP` with payload `{"group": group_name}` (R10).
-#
-# - `send_group_message(group_name: str, text: str) -> None`:
-#     Send `MSG_GROUP` with payload `{"group": group_name, "text": text}` (R11).
 
     def send_register(self, username: str) -> None:
         """Sends MSG_REGISTER with unique username payload (R3)."""
         self.send_packet(MSG_REGISTER, {"username": username})
 
-# ==============================================================================
-# TODO 4: Implement Bonus Feature Outgoing Methods (B1, B3, B4)
-# ==============================================================================
-# - `send_typing(room_type: str, target: str, is_typing: bool) -> None`:
-#     Send `MSG_TYPING` with payload:
-#     `{"room_type": room_type, "target": target, "is_typing": is_typing}` (B3).
-#
-# - `send_ai_summary_request(room_type: str, target: str) -> None`:
-#     Send `MSG_AI_SUMMARY_REQ` with payload:
-#     `{"room_type": room_type, "target": target}` (B1).
-#
-# - `send_voice_message(room_type: str, target: str, audio_b64: str, duration: float) -> None`:
-#     Send `MSG_VOICE_MSG` with payload:
-#     `{"room_type": room_type, "target": target, "audio_b64": audio_b64, "duration": duration}` (B4).
+    def send_create_group(self, group_name: str) -> None:
+        """Transmits group creation packet (R8)."""
+        self.send_packet(MSG_CREATE_GROUP, {"group": group_name})
+
+    def send_join_group(self, group_name: str) -> None:
+        """Transmits group self-join packet (R10)."""
+        self.send_packet(MSG_JOIN_GROUP, {"group": group_name})
+
+    def send_group_message(self, group_name: str, text: str) -> None:
+        """Transmits group room message packet (R11)."""
+        self.send_packet(MSG_GROUP, {"group": group_name, "text": text})
+
+    # ==========================================================================
+    # Bonus Feature Outgoing Action Methods (B1, B3, B4)
+    # ==========================================================================
+    def send_typing(self, room_type: str, target: str, is_typing: bool) -> None:
+        """Transmits typing status packet (B3)."""
+        self.send_packet(MSG_TYPING, {"room_type": room_type, "target": target, "is_typing": is_typing})
+
+    def send_ai_summary_request(self, room_type: str, target: str) -> None:
+        """Transmits AI conversation summary request packet (B1)."""
+        self.send_packet(MSG_AI_SUMMARY_REQ, {"room_type": room_type, "target": target})
+
+    def send_voice_message(self, room_type: str, target: str, audio_b64: str, duration: float) -> None:
+        """Transmits push-to-talk voice clip packet (B4)."""
+        self.send_packet(MSG_VOICE_MSG, {"room_type": room_type, "target": target, "audio_b64": audio_b64, "duration": duration})
