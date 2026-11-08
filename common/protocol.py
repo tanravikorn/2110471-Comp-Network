@@ -12,7 +12,7 @@ Mapped Requirements:
 import json
 import socket
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Generator, Optional, Union
 
 _send_lock = threading.Lock()
@@ -95,9 +95,17 @@ ERR_INVALID_PACKET: str = "INVALID_PACKET"    # Malformed JSON or missing keys
 # ==============================================================================
 # 6. Serialization & Envelope Helpers
 # ==============================================================================
+# Timezone constant for GMT+7 (ICT / Bangkok)
+TIMEZONE_GMT7: timezone = timezone(timedelta(hours=7))
+
+
+# Timezone constant for GMT+7 (ICT / Bangkok)
+TIMEZONE_GMT7: timezone = timezone(timedelta(hours=7))
+
+
 def get_current_timestamp() -> str:
     """Returns current local time formatted as 'HH:MM:SS'."""
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(timezone.utc).astimezone(TIMEZONE_GMT7).strftime("%H:%M:%S")
 
 
 def build_message(msg_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
