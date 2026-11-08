@@ -275,7 +275,6 @@ class LobbyWindow(ttk.Frame):
     def poll_incoming_queue(self) -> None:
         if not self.winfo_exists():
             return
-
         try:
             while True:
                 msg = self.network_client.incoming_queue.get_nowait()
