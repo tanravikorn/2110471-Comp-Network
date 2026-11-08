@@ -71,6 +71,9 @@ MSG_TYPING: str = "TYPING"
 MSG_AI_SUMMARY_REQ: str = "AI_SUMMARY_REQ"
 MSG_AI_SUMMARY_RES: str = "AI_SUMMARY_RES"
 
+# Chat History Retrieval
+GET_HISTORY: str = "GET_HISTORY"
+
 # Push-to-Talk Voice Message (B4)
 MSG_VOICE_MSG: str = "VOICE_MSG"
 

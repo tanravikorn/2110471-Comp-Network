@@ -44,6 +44,8 @@ class ServerState:
         self.groups: Dict[str, Set[str]] = {}
         # room_key -> list of {"timestamp": str, "sender": str, "text": str}
         self.room_history: Dict[str, List[Dict[str, Any]]] = {}
+        # Backward-compatible name for room chat history consumers.
+        self.history = self.room_history
         # room_keys with an AI summary request currently in flight
         self.summarizing_rooms: Set[str] = set()
 
