@@ -6,22 +6,27 @@ Verifies:
   - ServerState chat history buffering & sliding limit
   - handle_ai_summary packet validation & permissions
   - Async dispatch of AI_SUMMARY_RES
+  - Client GUI AI Summary button, loading state, and LobbyWindow packet routing
 """
 
 import json
 import os
 import tempfile
 import threading
+import tkinter as tk
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from client.gui_chatroom import ChatRoomWindow
+from client.gui_lobby import LobbyWindow
 from common.protocol import (
     ERR_AI_UNAVAILABLE,
     ERR_GROUP_NOT_FOUND,
     ERR_INVALID_PACKET,
     ERR_NOT_IN_GROUP,
     KEY_PAYLOAD,
+    KEY_TIMESTAMP,
     KEY_TYPE,
     MSG_AI_SUMMARY_RES,
     MSG_ERROR,
@@ -224,6 +229,94 @@ class TestAIHandler(unittest.TestCase):
         self.assertEqual(packet[KEY_PAYLOAD]["target"], "Bob")
         self.assertEqual(packet[KEY_PAYLOAD]["requested_by"], "Alice")
         self.assertIn("summary", packet[KEY_PAYLOAD])
+
+
+class TestClientAISummaryGUI(unittest.TestCase):
+    """Tests for Client-Side AI Summary UI & Packet Routing (Bonus B1)."""
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.mock_net = MagicMock()
+
+    def tearDown(self):
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+    def test_chatroom_request_and_display_ai_summary(self):
+        room = ChatRoomWindow(
+            parent=self.root,
+            room_type=ROOM_GROUP,
+            target_name="DevTeam",
+            own_username="Alice",
+            network_client=self.mock_net,
+        )
+        room.withdraw()
+
+        # Verify AI Summary button exists and is enabled
+        self.assertTrue(hasattr(room, "ai_summary_button"))
+        self.assertEqual(str(room.ai_summary_button.cget("text")), "✨ AI Summary")
+
+        # Click / trigger request_ai_summary
+        room.request_ai_summary()
+        self.mock_net.send_ai_summary_request.assert_called_once_with(ROOM_GROUP, "DevTeam")
+        self.assertTrue(room._is_requesting_summary)
+        self.assertIn("Generating AI conversation summary", room.chat_display.get("1.0", tk.END))
+
+        # Render AI summary response
+        room.display_ai_summary(
+            summary="• Completed socket layer\n• Deployed VPS",
+            requested_by="Alice",
+            timestamp="14:20:00",
+        )
+        content = room.chat_display.get("1.0", tk.END)
+        self.assertNotIn("Generating AI conversation summary", content)
+        self.assertIn("✨ AI Chat Summary (requested by You) • 14:20:00", content)
+        self.assertIn("• Completed socket layer", content)
+        self.assertFalse(room._is_requesting_summary)
+
+    @patch("client.gui_lobby.messagebox.showerror")
+    def test_lobby_dispatch_ai_summary_and_error_recovery(self, _mock_err):
+        lobby = LobbyWindow(
+            parent=self.root,
+            own_username="Bob",
+            network_client=self.mock_net,
+        )
+
+        # 1. Peer ("Alice") requested a private chat summary with "Bob"
+        lobby._process_network_packet({
+            KEY_TYPE: MSG_AI_SUMMARY_RES,
+            KEY_TIMESTAMP: "15:00:00",
+            KEY_PAYLOAD: {
+                "room_type": ROOM_PRIVATE,
+                "target": "Bob",
+                "requested_by": "Alice",
+                "summary": "Alice and Bob agreed on the deadline.",
+            },
+        })
+        self.assertIn("Alice", lobby.room_manager.private_rooms)
+        priv_room = lobby.room_manager.private_rooms["Alice"]
+        priv_text = priv_room.chat_display.get("1.0", tk.END)
+        self.assertIn("✨ AI Chat Summary (requested by Alice) • 15:00:00", priv_text)
+        self.assertIn("Alice and Bob agreed on the deadline.", priv_text)
+
+        # 2. Group summary routing and error recovery
+        grp_room = lobby.room_manager.get_or_create_group_room("NetGroup", ["Alice", "Bob"])
+        grp_room.request_ai_summary()
+        self.assertTrue(grp_room._is_requesting_summary)
+
+        # Simulate server returning MSG_ERROR (e.g., empty room) -> loading state should clear
+        lobby._process_network_packet({
+            KEY_TYPE: MSG_ERROR,
+            KEY_TIMESTAMP: "15:01:00",
+            KEY_PAYLOAD: {
+                "code": ERR_AI_UNAVAILABLE,
+                "message": "No chat messages in this room to summarize yet.",
+            },
+        })
+        self.assertFalse(grp_room._is_requesting_summary)
 
 
 if __name__ == "__main__":

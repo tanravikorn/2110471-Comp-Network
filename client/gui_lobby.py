@@ -1,6 +1,6 @@
 """
 Module: client/gui_lobby.py
-Purpose: Main Tkinter Lobby Window (Connected Clients List, Group List, & Room Launcher) (R4, R5, R6, R8, R9, R10, R11)
+Purpose: Main Tkinter Lobby Window (Connected Clients List, Group List, & Room Launcher) (R4, R5, R6, R8, R9, R10, R11, B1, B3, B4)
 Mapped Requirements:
   - R4 (Connected Client List): Displays a live list of all currently connected clients,
     explicitly including the client's own name (e.g., `"Alice (You)"`).
@@ -13,6 +13,7 @@ Mapped Requirements:
   - R10 (Self-Join Group): Provides a "Join Group" button allowing the client to join a selected
     group by themselves (never added automatically by the creator).
   - R11 (Group Messaging): Routes group chat messages to open room windows.
+  - B1 (AI Summary): Routes `AI_SUMMARY_RES` packets to the corresponding private or group room window.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from common.protocol import (
     KEY_PAYLOAD,
     KEY_TIMESTAMP,
     KEY_TYPE,
+    MSG_AI_SUMMARY_REQ,
+    MSG_AI_SUMMARY_RES,
     MSG_CLIENT_LIST,
     MSG_CREATE_GROUP,
     MSG_ERROR,
@@ -54,7 +57,7 @@ from common.protocol import (
 # R5 / R6 Chat Room Lifecycle & Dispatch Hooks
 # ==============================================================================
 class ChatRoomManager:
-    """Tracks and dispatches messages to dedicated ChatRoomWindow instances (R5, R6, B4 Cache)."""
+    """Tracks and dispatches messages to dedicated ChatRoomWindow instances (R5, R6, B1, B3, B4 Cache)."""
 
     def __init__(self, parent: tk.Misc, own_username: str, network_client: Any = None) -> None:
         self.parent = parent
@@ -234,7 +237,7 @@ class ChatRoomManager:
             except Exception:
                 pass
         self.group_rooms.clear()
-    
+
     def dispatch_typing(self, room_type: str, target: str, sender: str, is_typing: bool) -> None:
         """Dispatches real-time typing status updates to the matching room window (B3)."""
         peer = sender if room_type == ROOM_PRIVATE else target
@@ -250,6 +253,32 @@ class ChatRoomManager:
         room = self.get_or_create_private_room(peer) if room_type == ROOM_PRIVATE else self.get_or_create_group_room(target)
         self.record_voice_cache(room_type, room_target, effective_sender, audio_b64, duration, timestamp)
         room.append_voice_message(sender=effective_sender, audio_b64=audio_b64, duration=duration, timestamp=timestamp)
+
+    def dispatch_ai_summary(
+        self,
+        room_type: str,
+        target: str,
+        summary: str,
+        requested_by: str = "",
+        timestamp: str = "",
+    ) -> None:
+        """Routes incoming AI conversation summaries to the matching chat room window (B1)."""
+        if room_type == ROOM_GROUP:
+            room = self.get_or_create_group_room(target)
+        else:
+            peer = target if (not requested_by or requested_by == self.own_username) else requested_by
+            room = self.get_or_create_private_room(peer)
+        room.display_ai_summary(summary=summary, requested_by=requested_by, timestamp=timestamp)
+
+    def clear_all_ai_summary_loading(self) -> None:
+        """Clears pending AI summary loading state across all open rooms on server error (B1)."""
+        for room in list(self.private_rooms.values()) + list(self.group_rooms.values()):
+            try:
+                if room and room.winfo_exists() and hasattr(room, "clear_ai_summary_loading"):
+                    room.clear_ai_summary_loading()
+            except Exception:
+                pass
+
 
 # ==============================================================================
 # R4, R5, R8, R9, R10, R11 Main Lobby Window UI Component
@@ -657,6 +686,8 @@ class LobbyWindow(ttk.Frame):
             if room_type in (ROOM_PRIVATE, ROOM_GROUP) and target and hasattr(self, "room_manager"):
                 self.room_manager.dispatch_history(room_type, target, history)
         elif msg_type in (MSG_ERROR, "MSG_ERROR", "ERROR"):
+            if hasattr(self, "room_manager") and hasattr(self.room_manager, "clear_all_ai_summary_loading"):
+                self.room_manager.clear_all_ai_summary_loading()
             err_msg = payload.get("message", "An error occurred.")
             try:
                 messagebox.showerror("Server Error", err_msg)
@@ -669,7 +700,6 @@ class LobbyWindow(ttk.Frame):
             is_typing = payload.get("is_typing", False)
             if hasattr(self, "room_manager"):
                 self.room_manager.dispatch_typing(room_type, target, sender, is_typing)
-        
         elif msg_type in (MSG_VOICE_MSG, "MSG_VOICE_MSG", "VOICE_MSG"):
             room_type = str(payload.get("room_type", "")).upper()
             target = str(payload.get("target") or payload.get("to") or payload.get("group") or "").strip()
@@ -683,6 +713,13 @@ class LobbyWindow(ttk.Frame):
 
             if hasattr(self, "room_manager"):
                 self.room_manager.dispatch_voice_message(room_type, target, sender, audio_b64, duration, ts)
+        elif msg_type in (MSG_AI_SUMMARY_RES, "MSG_AI_SUMMARY_RES", "AI_SUMMARY_RES"):
+            room_type = str(payload.get("room_type", "")).upper()
+            target = str(payload.get("target", "")).strip()
+            requested_by = str(payload.get("requested_by", "")).strip()
+            summary = str(payload.get("summary", "")).strip()
+            if room_type in (ROOM_PRIVATE, ROOM_GROUP) and target and summary and hasattr(self, "room_manager"):
+                self.room_manager.dispatch_ai_summary(room_type, target, summary, requested_by, ts)
 
     def destroy(self) -> None:
         """Stops the queue polling loop and cleans up open chat rooms and widgets."""
