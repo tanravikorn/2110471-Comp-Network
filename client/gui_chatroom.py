@@ -53,6 +53,7 @@ class ChatRoomWindow(tk.Toplevel):
         network_client: Optional[Any] = None,
         on_close_callback: Optional[Callable[..., None]] = None,
         on_send_message_callback: Optional[Callable[[str, str], None]] = None,
+        on_voice_sent_callback: Optional[Callable[..., None]] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent)
@@ -65,6 +66,8 @@ class ChatRoomWindow(tk.Toplevel):
             on_send_message_callback = kwargs["on_send_message_callback"]
         if "on_close_callback" in kwargs and on_close_callback is None:
             on_close_callback = kwargs["on_close_callback"]
+        if "on_voice_sent_callback" in kwargs and on_voice_sent_callback is None:
+            on_voice_sent_callback = kwargs["on_voice_sent_callback"]
 
         self.room_type = room_type
         self.target_name = target_name
@@ -72,6 +75,7 @@ class ChatRoomWindow(tk.Toplevel):
         self.network_client = network_client
         self.on_close_callback = on_close_callback
         self.on_send_message_callback = on_send_message_callback
+        self.on_voice_sent_callback = on_voice_sent_callback
 
         # Real-time typing status state (B3)
         self._typing_timer: Optional[str] = None
@@ -718,10 +722,12 @@ class ChatRoomWindow(tk.Toplevel):
                 self.show_error("Voice recording too large (exceeds server limit of 5 MB). Please record a shorter message.")
                 return
 
+            ts = get_current_timestamp()
             self.append_voice_message(
                 sender=self.own_username,
                 audio_b64=audio_b64,
                 duration=duration,
+                timestamp=ts,
             )
 
             if self.network_client:
@@ -762,7 +768,14 @@ class ChatRoomWindow(tk.Toplevel):
         except Exception as err:
             self.show_error(f"Playback failed: {err}")
 
-    def append_voice_message(self, sender: str, audio_b64: str, duration: float, timestamp: str = "") -> None:
+    def append_voice_message(
+        self,
+        sender: str,
+        audio_b64: str,
+        duration: float,
+        timestamp: str = "",
+        autoplay: bool = True,
+    ) -> None:
         """Embeds a replayable voice clip formatted and aligned like standard chat text (B4)."""
         def _append():
             if not self.winfo_exists():
@@ -770,6 +783,19 @@ class ChatRoomWindow(tk.Toplevel):
 
             ts = timestamp if timestamp else get_current_timestamp()
             is_self = (sender == self.own_username or sender.lower() == self.own_username.lower() or sender == "You")
+
+            if autoplay and is_self and self.on_voice_sent_callback:
+                try:
+                    self.on_voice_sent_callback(
+                        self.room_type,
+                        self.target_name,
+                        self.own_username,
+                        audio_b64,
+                        duration,
+                        ts,
+                    )
+                except Exception:
+                    pass
 
             if hasattr(self, "_active_typers"):
                 self._active_typers.discard(sender)
@@ -822,7 +848,7 @@ class ChatRoomWindow(tk.Toplevel):
             self.chat_display.configure(state="disabled")
             self.chat_display.see(tk.END)
 
-            if not is_self:
+            if autoplay and not is_self:
                 self._play_audio_b64(audio_b64)
 
         self._run_on_ui_thread(_append)

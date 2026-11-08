@@ -54,7 +54,7 @@ from common.protocol import (
 # R5 / R6 Chat Room Lifecycle & Dispatch Hooks
 # ==============================================================================
 class ChatRoomManager:
-    """Tracks and dispatches messages to dedicated ChatRoomWindow instances (R5, R6)."""
+    """Tracks and dispatches messages to dedicated ChatRoomWindow instances (R5, R6, B4 Cache)."""
 
     def __init__(self, parent: tk.Misc, own_username: str, network_client: Any = None) -> None:
         self.parent = parent
@@ -62,6 +62,89 @@ class ChatRoomManager:
         self.network_client = network_client
         self.private_rooms: Dict[str, ChatRoomWindow] = {}
         self.group_rooms: Dict[str, ChatRoomWindow] = {}
+        # Client-side in-memory cache per (room_type, target) for text & voice clips (B4)
+        self.room_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        self.voice_cache = self.room_cache
+        self.max_cache_items: int = 50
+
+    def _cache_key(self, room_type: str, target: str) -> Tuple[str, str]:
+        return (str(room_type).strip().upper(), str(target).strip())
+
+    def record_text_cache(
+        self,
+        room_type: str,
+        target: str,
+        sender: str,
+        text: str,
+        timestamp: str = "",
+    ) -> None:
+        """Stores a text message in client-side in-memory room cache."""
+        key = self._cache_key(room_type, target)
+        bucket = self.room_cache.setdefault(key, [])
+        entry = {
+            "type": "text",
+            "sender": sender,
+            "text": text,
+            "timestamp": timestamp,
+        }
+        if bucket and bucket[-1] == entry:
+            return
+        bucket.append(entry)
+        if len(bucket) > self.max_cache_items:
+            self.room_cache[key] = bucket[-self.max_cache_items:]
+
+    def record_voice_cache(
+        self,
+        room_type: str,
+        target: str,
+        sender: str,
+        audio_b64: str,
+        duration: float,
+        timestamp: str = "",
+    ) -> None:
+        """Stores a Base64 voice clip in client-side in-memory room cache (B4)."""
+        key = self._cache_key(room_type, target)
+        bucket = self.room_cache.setdefault(key, [])
+        entry = {
+            "type": "voice",
+            "sender": sender,
+            "audio_b64": audio_b64,
+            "duration": float(duration),
+            "timestamp": timestamp,
+        }
+        if (
+            bucket
+            and bucket[-1].get("type") == "voice"
+            and bucket[-1].get("sender") == sender
+            and bucket[-1].get("audio_b64") == audio_b64
+            and bucket[-1].get("timestamp") == timestamp
+        ):
+            return
+        bucket.append(entry)
+        if len(bucket) > self.max_cache_items:
+            self.room_cache[key] = bucket[-self.max_cache_items:]
+
+    def get_cached_messages(self, room_type: str, target: str) -> List[Dict[str, Any]]:
+        """Returns a shallow copy of cached text and voice items for a room."""
+        return list(self.room_cache.get(self._cache_key(room_type, target), []))
+
+    def _restore_cached_room_items(self, room: ChatRoomWindow, room_type: str, target: str) -> None:
+        """Re-renders cached messages and replayable voice buttons (with autoplay=False) on room reopen."""
+        for item in self.get_cached_messages(room_type, target):
+            if item.get("type") == "voice":
+                room.append_voice_message(
+                    sender=str(item.get("sender", "")),
+                    audio_b64=str(item.get("audio_b64", "")),
+                    duration=float(item.get("duration", 0.0)),
+                    timestamp=str(item.get("timestamp", "")),
+                    autoplay=False,
+                )
+            else:
+                room.append_message(
+                    sender=str(item.get("sender", "")),
+                    text=str(item.get("text", "")),
+                    timestamp=str(item.get("timestamp", "")),
+                )
 
     def get_or_create_private_room(self, peer_username: str) -> ChatRoomWindow:
         if peer_username in self.private_rooms:
@@ -77,9 +160,10 @@ class ChatRoomManager:
             own_username=self.own_username,
             network_client=self.network_client,
             on_close_callback=lambda _rt, target: self.private_rooms.pop(target, None),
+            on_voice_sent_callback=self.record_voice_cache,
         )
         self.private_rooms[peer_username] = room
-        self._request_history(ROOM_PRIVATE, peer_username)
+        self._restore_cached_room_items(room, ROOM_PRIVATE, peer_username)
         return room
 
     def get_or_create_group_room(self, group_name: str, members: Optional[List[str]] = None) -> ChatRoomWindow:
@@ -98,11 +182,12 @@ class ChatRoomManager:
             own_username=self.own_username,
             network_client=self.network_client,
             on_close_callback=lambda _rt, target: self.group_rooms.pop(target, None),
+            on_voice_sent_callback=self.record_voice_cache,
         )
         if members:
             room.set_participants(members)
         self.group_rooms[group_name] = room
-        self._request_history(ROOM_GROUP, group_name)
+        self._restore_cached_room_items(room, ROOM_GROUP, group_name)
         return room
 
     def _request_history(self, room_type: str, target: str) -> None:
@@ -127,10 +212,12 @@ class ChatRoomManager:
     def dispatch_private_message(self, sender: str, target: str, text: str, timestamp: str = "") -> None:
         peer = target if sender == self.own_username else sender
         room = self.get_or_create_private_room(peer)
+        self.record_text_cache(ROOM_PRIVATE, peer, sender, text, timestamp)
         room.append_message(sender=sender, text=text, timestamp=timestamp)
 
     def dispatch_group_message(self, group_name: str, sender: str, text: str, timestamp: str = "") -> None:
         room = self.get_or_create_group_room(group_name)
+        self.record_text_cache(ROOM_GROUP, group_name, sender, text, timestamp)
         room.append_message(sender=sender, text=text, timestamp=timestamp)
 
     def close_all_rooms(self) -> None:
@@ -156,10 +243,12 @@ class ChatRoomManager:
             room.set_typing_status(sender, is_typing)
 
     def dispatch_voice_message(self, room_type: str, target: str, sender: str, audio_b64: str, duration: float, timestamp: str = "") -> None:
-        """Routes incoming Base64 voice messages to the matching chat room window (B4)."""
+        """Routes incoming Base64 voice messages to the matching chat room window and stores in client cache (B4)."""
         effective_sender = sender if sender else target
         peer = target if effective_sender == self.own_username else effective_sender
+        room_target = peer if room_type == ROOM_PRIVATE else target
         room = self.get_or_create_private_room(peer) if room_type == ROOM_PRIVATE else self.get_or_create_group_room(target)
+        self.record_voice_cache(room_type, room_target, effective_sender, audio_b64, duration, timestamp)
         room.append_voice_message(sender=effective_sender, audio_b64=audio_b64, duration=duration, timestamp=timestamp)
 
 # ==============================================================================

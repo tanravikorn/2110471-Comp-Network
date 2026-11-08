@@ -2,7 +2,7 @@
 
 **Document Status:** Active
 **Last Synchronized:** 2026-11-08
-**Current Sprint / Phase:** Bonus B1 (AI Summary) & Cloud VPS Hardening Completed (47/47 Tests Passing)
+**Current Sprint / Phase:** Client In-Memory Voice Cache & Bonus Features Completed (48/48 Tests Passing)
 
 ---
 
@@ -44,8 +44,8 @@
   - **Application Protocol Layer:** Newline-delimited (`\n`) UTF-8 JSON messages using a standardized 3-key Envelope (`type`, `timestamp`, `payload`).
 - **Frontend (Client GUI):** Python `tkinter` & `tkinter.ttk`
   - **Login Window (`client/gui_login.py`):** Server IP (LAN or Cloud VPS Public IP), Port, and unique Username input.
-  - **Main Lobby (`client/gui_lobby.py`):** Displays online clients (`R4`) and all groups with member lists (`R9`), plus controls to open Private Chats (`R5`), Create Group (`R8`), and Join Group (`R10`).
-  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), Typing Indicator status bar (`B3`), and Voice Message recorder/player (`B4`).
+  - **Main Lobby (`client/gui_lobby.py`):** Displays online clients (`R4`) and all groups with member lists (`R9`), plus controls to open Private Chats (`R5`), Create Group (`R8`), Join Group (`R10`), and in-memory room/voice caching via `ChatRoomManager` (`B4`).
+  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), Typing Indicator status bar (`B3`), and Voice Message recorder/player with cached replay support (`B4`).
   - **Audio Helper (`client/audio.py`):** Records/plays short `.wav` voice clips and converts between raw audio bytes and Base64 strings (`B4`).
 - **Backend (Server):** Python `socket` + `threading`
   - One main listening thread accepting connections (`server/server.py`).
