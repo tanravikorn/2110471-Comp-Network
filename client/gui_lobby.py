@@ -164,7 +164,6 @@ class ChatRoomManager:
         )
         self.private_rooms[peer_username] = room
         self._restore_cached_room_items(room, ROOM_PRIVATE, peer_username)
-        self._request_history(ROOM_PRIVATE, peer_username)
         return room
 
     def get_or_create_group_room(self, group_name: str, members: Optional[List[str]] = None) -> ChatRoomWindow:
@@ -189,7 +188,6 @@ class ChatRoomManager:
             room.set_participants(members)
         self.group_rooms[group_name] = room
         self._restore_cached_room_items(room, ROOM_GROUP, group_name)
-        self._request_history(ROOM_GROUP, group_name)
         return room
 
     def _request_history(self, room_type: str, target: str) -> None:
