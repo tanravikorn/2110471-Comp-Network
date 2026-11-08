@@ -282,6 +282,61 @@ class TestClientRequirements(unittest.TestCase):
         self.assertEqual(recv["type"], MSG_VOICE_MSG)
         self.assertEqual(recv["payload"]["audio_data"], dummy_audio_b64)
 
+    def test_B4_client_voice_cache_on_room_reopen(self):
+        """B4: Verifies client-side in-memory cache preserves voice and text clips when reopening a closed room."""
+        import tkinter as tk
+        from unittest.mock import patch
+        from client.gui_lobby import ChatRoomManager
+        from common.protocol import ROOM_PRIVATE
+
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except tk.TclError:
+            self.skipTest("Tkinter display not available in headless environment")
+            return
+
+        try:
+            mgr = ChatRoomManager(parent=root, own_username="Alice", network_client=None)
+            dummy_b64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
+
+            with patch("client.gui_chatroom.ChatRoomWindow._play_audio_b64") as mock_play:
+                # 1. Dispatch text + incoming voice + self voice in private room with Bob
+                mgr.dispatch_private_message("Bob", "Alice", "Hello before voice", "12:01:00")
+                mgr.dispatch_voice_message(ROOM_PRIVATE, "Alice", "Bob", dummy_b64, 2.5, "12:01:05")
+                room1 = mgr.get_or_create_private_room("Bob")
+                room1.append_voice_message("Alice", dummy_b64, 1.8, "12:01:10")
+
+                # Incoming live voice from Bob auto-played once
+                self.assertEqual(mock_play.call_count, 1)
+                self.assertEqual(len(getattr(room1, "_voice_buttons", [])), 2)
+
+                # Verify cache stored all 3 items in order
+                cached = mgr.get_cached_messages(ROOM_PRIVATE, "Bob")
+                self.assertEqual(len(cached), 3)
+                self.assertEqual(cached[0]["type"], "text")
+                self.assertEqual(cached[1]["type"], "voice")
+                self.assertEqual(cached[1]["sender"], "Bob")
+                self.assertEqual(cached[2]["type"], "voice")
+                self.assertEqual(cached[2]["sender"], "Alice")
+
+                # 2. Close the room window (simulating user clicking 'X')
+                room1._on_window_close()
+                self.assertNotIn("Bob", mgr.private_rooms)
+
+                # 3. Reopen the room window and verify both voice buttons are restored without auto-playing
+                mock_play.reset_mock()
+                room2 = mgr.get_or_create_private_room("Bob")
+                self.assertEqual(mock_play.call_count, 0)
+                self.assertEqual(len(getattr(room2, "_voice_buttons", [])), 2)
+                display_text = room2.chat_display.get("1.0", tk.END)
+                self.assertIn("Hello before voice", display_text)
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()
