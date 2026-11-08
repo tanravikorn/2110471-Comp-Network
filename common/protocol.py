@@ -73,6 +73,7 @@ MSG_AI_SUMMARY_RES: str = "AI_SUMMARY_RES"
 
 # Chat History Retrieval
 GET_HISTORY: str = "GET_HISTORY"
+HISTORY_REPLY: str = "HISTORY_REPLY"
 
 # Push-to-Talk Voice Message (B4)
 MSG_VOICE_MSG: str = "VOICE_MSG"
