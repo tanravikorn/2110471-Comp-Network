@@ -43,6 +43,7 @@ from common.protocol import (
     MSG_GROUP_LIST,
     MSG_JOIN_GROUP,
     MSG_PRIVATE,
+    MSG_TYPING,
     ROOM_GROUP,
     ROOM_PRIVATE,
 )
@@ -147,7 +148,13 @@ class ChatRoomManager:
             except Exception:
                 pass
         self.group_rooms.clear()
-
+    
+    def dispatch_typing(self, room_type: str, target: str, sender: str, is_typing: bool) -> None:
+        """Dispatches real-time typing status updates to the matching room window (B3)."""
+        peer = sender if room_type == ROOM_PRIVATE else target
+        room = self.private_rooms.get(peer) if room_type == ROOM_PRIVATE else self.group_rooms.get(target)
+        if room and room.winfo_exists():
+            room.set_typing_status(sender, is_typing)
 
 # ==============================================================================
 # R4, R5, R8, R9, R10, R11 Main Lobby Window UI Component
@@ -560,6 +567,13 @@ class LobbyWindow(ttk.Frame):
                 messagebox.showerror("Server Error", err_msg)
             except Exception:
                 pass
+        elif msg_type in (MSG_TYPING, "MSG_TYPING", "TYPING"):
+            room_type = str(payload.get("room_type", "")).upper()
+            target = str(payload.get("target", "")).strip()
+            sender = str(payload.get("from", "")).strip()
+            is_typing = payload.get("is_typing", False)
+            if hasattr(self, "room_manager"):
+                self.room_manager.dispatch_typing(room_type, target, sender, is_typing)
 
     def destroy(self) -> None:
         """Stops the queue polling loop and cleans up open chat rooms and widgets."""
