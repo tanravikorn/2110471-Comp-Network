@@ -66,8 +66,10 @@ class ServerState:
         """Removes a client from active directory and group memberships upon disconnect."""
         with self.lock:
             self.clients.pop(username, None)
-            for member_set in self.groups.values():
-                member_set.discard(username)
+            for group_name in list(self.groups.keys()):
+                self.groups[group_name].discard(username)
+                if len(self.groups[group_name]) == 0:
+                    del self.groups[group_name]
 
     def get_client_list(self) -> List[str]:
         """Returns a sorted list of all currently connected usernames (R4)."""

@@ -16,6 +16,7 @@ from common.protocol import (
     KEY_TYPE,
     MSG_CLIENT_LIST,
     MSG_ERROR,
+    MSG_GROUP_LIST,
     MSG_REGISTER,
     MSG_REGISTER_ACK,
     SocketLineBuffer,
@@ -119,6 +120,10 @@ class TestRegisterHandler(unittest.TestCase):
             self.assertEqual(cl1[KEY_TYPE], MSG_CLIENT_LIST)
             self.assertIn("Alice", cl1[KEY_PAYLOAD]["clients"])
 
+            # Alice receives initial GROUP_LIST upon registration (R9)
+            gl1 = alice_buf.read_message()
+            self.assertEqual(gl1[KEY_TYPE], MSG_GROUP_LIST)
+
             # 2. Bob tries to register as "Alice" -> Rejected!
             bob_sock.sendall(encode_message(MSG_REGISTER, {"username": "Alice"}))
             dup_ack = bob_buf.read_message()
@@ -137,10 +142,12 @@ class TestRegisterHandler(unittest.TestCase):
             self.assertEqual(alice_cl2[KEY_TYPE], MSG_CLIENT_LIST)
             self.assertEqual(sorted(alice_cl2[KEY_PAYLOAD]["clients"]), ["Alice", "Bob"])
 
-            # Bob also receives CLIENT_LIST with [Alice, Bob] (R4)
+            # Bob also receives CLIENT_LIST with [Alice, Bob] (R4) and GROUP_LIST (R9)
             bob_cl = bob_buf.read_message()
             self.assertEqual(bob_cl[KEY_TYPE], MSG_CLIENT_LIST)
             self.assertEqual(sorted(bob_cl[KEY_PAYLOAD]["clients"]), ["Alice", "Bob"])
+            bob_gl = bob_buf.read_message()
+            self.assertEqual(bob_gl[KEY_TYPE], MSG_GROUP_LIST)
 
         finally:
             alice_sock.close()
@@ -159,10 +166,12 @@ class TestRegisterHandler(unittest.TestCase):
             c1_sock.sendall(encode_message(MSG_REGISTER, {"username": "TempUser1"}))
             c1_buf.read_message()  # ACK
             c1_buf.read_message()  # CLIENT_LIST
+            c1_buf.read_message()  # GROUP_LIST
 
             c2_sock.sendall(encode_message(MSG_REGISTER, {"username": "TempUser2"}))
             c2_buf.read_message()  # ACK
             c2_buf.read_message()  # CLIENT_LIST
+            c2_buf.read_message()  # GROUP_LIST
             c1_buf.read_message()  # Update for c1
 
             # Disconnect TempUser1

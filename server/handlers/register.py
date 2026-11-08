@@ -4,6 +4,7 @@ Purpose: Action Handler for MSG_REGISTER
 Mapped Requirements:
   - R3 (Unique Client Name): Validates and registers a unique username.
   - R4 (Online Client Directory): Broadcasts updated CLIENT_LIST to all clients upon successful registration.
+  - R9 (Group List Directory): Sends existing GROUP_LIST to newly registered client.
 """
 
 import logging
@@ -12,6 +13,7 @@ from typing import Any, Dict
 
 from common.protocol import (
     MSG_CLIENT_LIST,
+    MSG_GROUP_LIST,
     MSG_REGISTER_ACK,
     send_packet,
 )
@@ -77,6 +79,9 @@ def handle_register(
 
         # Broadcast updated client directory to all connected clients (R4)
         broadcast_client_list(state)
+
+        # Send existing group directory to newly registered client (R9)
+        send_packet(client_sock, MSG_GROUP_LIST, {"groups": state.get_groups_with_members()})
         return True
     else:
         logger.warning(f"Rejected registration: '{requested_name}' is already taken")
