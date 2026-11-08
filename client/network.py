@@ -1,12 +1,6 @@
 """
 Module: client/network.py
-Purpose: Client TCP Socket Wrapper & Background Receiver Thread
-Mapped Requirements:
-  - R2 (Socket Programming Only): Uses `socket.socket(socket.AF_INET, socket.SOCK_STREAM)`
-    to exchange newline-delimited JSON envelopes (`type`, `timestamp`, `payload`) with the server.
-  - R3–R11 (Fundamental): Sends registration, private messages, group creation/join, and group messages.
-  - B1, B3, B4 (Bonus): Sends typing indicator updates (`TYPING`), AI summary requests (`AI_SUMMARY_REQ`),
-    and Base64 WAV voice clips (`VOICE_MSG`), while queuing incoming server packets for the GUI.
+Purpose: Client TCP Socket Wrapper & Background Receiver Thread (R2-R11, B1, B3, B4)
 """
 import queue
 import socket
@@ -17,14 +11,19 @@ from common.protocol import (
     BUFFER_SIZE,
     DEFAULT_HOST,
     DEFAULT_PORT,
+    MSG_AI_SUMMARY_REQ,
+    MSG_CREATE_GROUP,
+    MSG_GROUP,
+    MSG_JOIN_GROUP,
+    MSG_PRIVATE,
     MSG_REGISTER,
+    MSG_TYPING,
+    MSG_VOICE_MSG,
     SocketLineBuffer,
     encode_message,
 )
 
-# ==============================================================================
-# 1. NetworkClient Class
-# ==============================================================================
+
 class NetworkClient:
     def __init__(self, incoming_queue: Optional[queue.Queue] = None):
         self.sock: Optional[socket.socket] = None
@@ -33,9 +32,6 @@ class NetworkClient:
         self.username: Optional[str] = None
         self.receive_thread: Optional[threading.Thread] = None
 
-    # ==========================================================================
-    # Connection & Background Listener Thread (R1, R2, B2)
-    # ==========================================================================
     def connect(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> Tuple[bool, str]:
         """Creates a raw TCP socket connection and launches background receiver thread (R2)."""
         try:
@@ -86,7 +82,12 @@ class NetworkClient:
 
     def send_register(self, username: str) -> None:
         """Sends MSG_REGISTER with unique username payload (R3)."""
+        self.username = username
         self.send_packet(MSG_REGISTER, {"username": username})
+
+    def send_private_message(self, target_user: str, text: str) -> None:
+        """Transmits 1-on-1 private message (R7)."""
+        self.send_packet(MSG_PRIVATE, {"to": target_user, "text": text})
 
     def send_create_group(self, group_name: str) -> None:
         """Transmits group creation packet (R8)."""
@@ -100,9 +101,6 @@ class NetworkClient:
         """Transmits group room message packet (R11)."""
         self.send_packet(MSG_GROUP, {"group": group_name, "text": text})
 
-    # ==========================================================================
-    # Bonus Feature Outgoing Action Methods (B1, B3, B4)
-    # ==========================================================================
     def send_typing(self, room_type: str, target: str, is_typing: bool) -> None:
         """Transmits typing status packet (B3)."""
         self.send_packet(MSG_TYPING, {"room_type": room_type, "target": target, "is_typing": is_typing})
