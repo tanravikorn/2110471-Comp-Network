@@ -17,6 +17,11 @@ Mapped Requirements:
 # - Import `LobbyWindow` from `client.gui_lobby`
 
 import queue
+import sys
+import tkinter as tk
+
+from client.gui_lobby import LobbyWindow
+from client.gui_login import LoginWindow
 from client.network import NetworkClient
 
 # ==============================================================================
@@ -33,59 +38,56 @@ from client.network import NetworkClient
 # 4. Start `root.mainloop()` and ensure socket cleanup on window close (`WM_DELETE_WINDOW`).
 
 def main():
-    """R2 Socket Test Launcher."""
-    incoming_queue = queue.Queue()
-    client = NetworkClient(incoming_queue)
+    # 1. Create main Tkinter root window
+    root = tk.Tk()
+    root.title("Network Chat — Login")
+    root.geometry("400x320")
+    root.resizable(False, False)
 
-    while True:
-        host = input("Enter Server IP [127.0.0.1] (or 'quit' to exit): ").strip() or "127.0.0.1"
-        if host.lower() == "quit":
-            print("Exiting application.")
-            return
+    # Bring window to front on macOS / VS Code
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after_idle(root.attributes, "-topmost", False)
 
-        port_input = input("Enter Server Port [5000]: ").strip() or "5000"
-        try:
-            port = int(port_input)
-        except ValueError:
-            print("[ERROR] Invalid port number. Please enter an integer.\n")
-            continue
+    # 2. Instantiate NetworkClient (creates thread-safe incoming_queue internally)
+    client = NetworkClient()
 
-        ok, err_msg = client.connect(host, port)
-        if ok:
-            print("\n[R2 SOCKET CONNECTED] Raw TCP Socket Interface Ready.")
-            break
-
-        print(f"[SOCKET ERROR] {err_msg}. Please try again.\n")
-
-    try:
-        while True:
-            # Drain and print raw packets received over socket
-            while not incoming_queue.empty():
-                msg = incoming_queue.get_nowait()
-                mtype = msg.get("type")
-                payload = msg.get("payload", {})
-                ts = msg.get("timestamp", "")
-                print(f"[{ts}] RECV OVER SOCKET -> Type: {mtype} | Payload: {payload}")
-                if mtype == "DISCONNECTED":
-                    print("[SOCKET CLOSED] Connection lost.")
-                    return
-
-            cmd = input("\nType 'send <type> <text>' or 'quit': ").strip()
-            if not cmd:
-                continue
-            if cmd.lower() == "quit":
-                break
-
-            parts = cmd.split(" ", 2)
-            if parts[0].lower() == "send" and len(parts) == 3:
-                client.send_packet(parts[1], {"text": parts[2]})
-            else:
-                print("Usage: send <msg_type> <text_payload>")
-
-    except KeyboardInterrupt:
-        print("\nExiting...")
-    finally:
+    # Clean disconnection handler on window exit
+    def on_closing():
         client.disconnect()
+        root.destroy()
+        sys.exit(0)
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    # 3. Transition callback called when LoginWindow succeeds (R3 -> Lobby)
+    def on_login_success(username: str):
+        # Remove Login frame
+        login_frame.destroy()
+
+        # Update window dimensions & title for Lobby
+        root.title(f"Network Chat — Logged in as {username}")
+        root.geometry("750x500")
+        root.resizable(True, True)
+
+        # Launch main LobbyWindow (R4, R5, R8-R11)
+        lobby_frame = LobbyWindow(
+            parent=root,
+            own_username=username,
+            network_client=client,
+        )
+        lobby_frame.pack(fill="both", expand=True)
+
+    # 4. Display LoginWindow first (R1, R3)
+    login_frame = LoginWindow(
+        parent=root,
+        network_client=client,
+        on_login_success=on_login_success,
+    )
+    login_frame.pack(fill="both", expand=True)
+
+    # 5. Start Tkinter event loop
+    root.mainloop()
         
 # ==============================================================================
 # TODO 3: Implement CLI Entry Point (`if __name__ == "__main__":`)

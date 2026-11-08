@@ -101,9 +101,11 @@ class TestAudioHandler(unittest.TestCase):
         self.assertEqual(ack[KEY_TYPE], MSG_REGISTER_ACK)
         self.assertTrue(ack[KEY_PAYLOAD]["success"])
 
-        # 3. Consume broadcast CLIENT_LIST triggered by registration
+        # 3. Consume broadcast CLIENT_LIST and initial GROUP_LIST triggered by registration
         broadcast = buf.read_message()
         self.assertEqual(broadcast[KEY_TYPE], MSG_CLIENT_LIST)
+        gl = buf.read_message()
+        self.assertEqual(gl[KEY_TYPE], MSG_GROUP_LIST)
 
         return sock, buf
 
