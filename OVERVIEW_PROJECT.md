@@ -52,7 +52,7 @@
   - Thread-safe state store protected by `threading.Lock` (`server/state.py`), maintaining active clients, groups, and bounded per-room message history for AI summarization.
   - Dedicated worker thread per connected client (`server/client_handler.py`).
   - Modular Handlers (`server/handlers/`):
-    - `register.py`: Client registration (`R3`) & client directory broadcast (`R4`).
+    - `register.py`: Client registration (`R3`), client directory broadcast (`R4`), & initial existing group list push (`R9`).
     - `private_msg.py`: 1-on-1 private messaging (`R7`) & history recording (`B1`).
     - `group.py`: Group creation (`R8`), directory broadcast (`R9`), self-join (`R10`), group multicast (`R11`), & history recording (`B1`).
     - `typing.py`: Real-time typing indicator relay for private & group chats (`B3`).

@@ -68,6 +68,7 @@ class ServerState:
             self.clients.pop(username, None)
             for member_set in self.groups.values():
                 member_set.discard(username)
+            self.groups = {g: m for g, m in self.groups.items() if m}
 
     def get_client_list(self) -> List[str]:
         """Returns a sorted list of all currently connected usernames (R4)."""

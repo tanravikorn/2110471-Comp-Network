@@ -95,7 +95,8 @@ class TestMessagingHandlers(unittest.TestCase):
         self.assertEqual(ack[KEY_TYPE], MSG_REGISTER_ACK)
         self.assertTrue(ack[KEY_PAYLOAD]["success"])
 
-        # 3. Read broadcast CLIENT_LIST resulting from registration
+        # 3. Read broadcast CLIENT_LIST and initial GROUP_LIST resulting from registration
+        buf.read_message()
         buf.read_message()
         return client, buf
 
@@ -225,6 +226,15 @@ class TestMessagingHandlers(unittest.TestCase):
             gl_update = u1_buf.read_message()
             self.assertEqual(gl_update[KEY_TYPE], MSG_GROUP_LIST)
             self.assertEqual(gl_update[KEY_PAYLOAD]["groups"]["PythonRoom"], ["User1"])
+            u3_buf.read_message()  # U2 disconnect CLIENT_LIST
+            u3_buf.read_message()  # U2 disconnect GROUP_LIST
+
+            # 7. Disconnect User1 (last member) -> PythonRoom is auto-deleted
+            u1_sock.close()
+            u3_buf.read_message()  # U1 disconnect CLIENT_LIST
+            gl_empty = u3_buf.read_message()
+            self.assertEqual(gl_empty[KEY_TYPE], MSG_GROUP_LIST)
+            self.assertNotIn("PythonRoom", gl_empty[KEY_PAYLOAD]["groups"])
 
         finally:
             u1_sock.close()
