@@ -414,7 +414,7 @@ class ChatRoomWindow(tk.Toplevel):
         )
 
     def render_history(self, history: List[Dict[str, Any]]) -> None:
-        """Renders recorded history into the chat widget without wiping live voice clips (B1)."""
+        """Renders recorded history into the chat widget without duplicating live messages (B1)."""
         def _render():
             if not self.winfo_exists():
                 return
@@ -424,47 +424,26 @@ class ChatRoomWindow(tk.Toplevel):
             self._history_rendered = True
 
             self.chat_display.configure(state="normal")
-            
-            existing_content = self.chat_display.get("1.0", tk.END).strip()
+            # Clear window so live messages and history payload don't duplicate
+            self.chat_display.delete("1.0", tk.END)
 
-            if not existing_content:
-                self.chat_display.delete("1.0", tk.END)
-                for item in history:
-                    if not isinstance(item, dict):
-                        continue
-                    sender = str(item.get("sender", "System")).strip() or "System"
-                    text = str(item.get("text", "")).strip()
-                    timestamp = str(item.get("timestamp", "")).strip()
-                    if not text:
-                        continue
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                sender = str(item.get("sender", "System")).strip() or "System"
+                text = str(item.get("text", "")).strip()
+                timestamp = str(item.get("timestamp", "")).strip()
+                if not text:
+                    continue
 
-                    is_self = sender.lower() == self.own_username.lower()
-                    ts_str = f" • {timestamp}" if timestamp else ""
-                    if is_self:
-                        self.chat_display.insert(tk.END, f"You{ts_str}\n", ("self_header", "own_header"))
-                        self.chat_display.insert(tk.END, f"{text}\n\n", ("self_msg", "own_msg"))
-                    else:
-                        self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
-                        self.chat_display.insert(tk.END, f"{text}\n\n", ("other_msg",))
-            else:
-                for item in reversed(history):
-                    if not isinstance(item, dict):
-                        continue
-                    sender = str(item.get("sender", "System")).strip() or "System"
-                    text = str(item.get("text", "")).strip()
-                    timestamp = str(item.get("timestamp", "")).strip()
-                    if not text:
-                        continue
-
-                    is_self = sender.lower() == self.own_username.lower()
-                    ts_str = f" • {timestamp}" if timestamp else ""
-                    
-                    if is_self:
-                        self.chat_display.insert("1.0", f"{text}\n\n", ("self_msg", "own_msg"))
-                        self.chat_display.insert("1.0", f"You{ts_str}\n", ("self_header", "own_header"))
-                    else:
-                        self.chat_display.insert("1.0", f"{text}\n\n", ("other_msg",))
-                        self.chat_display.insert("1.0", f"{sender}{ts_str}\n", ("other_header",))
+                is_self = sender.lower() == self.own_username.lower()
+                ts_str = f" • {timestamp}" if timestamp else ""
+                if is_self:
+                    self.chat_display.insert(tk.END, f"You{ts_str}\n", ("self_header", "own_header"))
+                    self.chat_display.insert(tk.END, f"{text}\n\n", ("self_msg", "own_msg"))
+                else:
+                    self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
+                    self.chat_display.insert(tk.END, f"{text}\n\n", ("other_msg",))
 
             self.chat_display.configure(state="disabled")
             self.chat_display.see(tk.END)
