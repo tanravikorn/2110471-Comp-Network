@@ -44,6 +44,7 @@ from common.protocol import (
     MSG_JOIN_GROUP,
     MSG_PRIVATE,
     MSG_TYPING,
+    MSG_VOICE_MSG,
     ROOM_GROUP,
     ROOM_PRIVATE,
 )
@@ -67,7 +68,6 @@ class ChatRoomManager:
             room = self.private_rooms[peer_username]
             if room.winfo_exists():
                 room.bring_to_front()
-                self._request_history(ROOM_PRIVATE, peer_username)
                 return room
 
         room = ChatRoomWindow(
@@ -89,7 +89,6 @@ class ChatRoomManager:
                 if members:
                     room.set_participants(members)
                 room.bring_to_front()
-                self._request_history(ROOM_GROUP, group_name)
                 return room
 
         room = ChatRoomWindow(
@@ -156,6 +155,13 @@ class ChatRoomManager:
         if room and room.winfo_exists():
             room.set_typing_status(sender, is_typing)
 
+    def dispatch_voice_message(self, room_type: str, target: str, sender: str, audio_b64: str, duration: float, timestamp: str = "") -> None:
+        """Routes incoming Base64 voice messages to the matching chat room window (B4)."""
+        effective_sender = sender if sender else target
+        peer = target if effective_sender == self.own_username else effective_sender
+        room = self.get_or_create_private_room(peer) if room_type == ROOM_PRIVATE else self.get_or_create_group_room(target)
+        room.append_voice_message(sender=effective_sender, audio_b64=audio_b64, duration=duration, timestamp=timestamp)
+
 # ==============================================================================
 # R4, R5, R8, R9, R10, R11 Main Lobby Window UI Component
 # ==============================================================================
@@ -168,7 +174,7 @@ class LobbyWindow(ttk.Frame):
         with a clear header/label, updating upon receiving MSG_CLIENT_LIST packets, and explicitly
         formatting the client's own username as "{username} (You)".
       - R5 (Separate Chat Rooms): Controls to open dedicated private chat and group chat rooms.
-      - R8 (Create Group): Entry box and button to create a new chat group.
+      - R8 (Create Group): Provides UI input/button to create a new chat group.
       - R9 (Group List): Renders all active groups with member lists in Treeview and Listbox,
         updating upon receiving MSG_GROUP_LIST packets, and formatting items as
         "{group_name} ({member_count} members)".
@@ -570,10 +576,24 @@ class LobbyWindow(ttk.Frame):
         elif msg_type in (MSG_TYPING, "MSG_TYPING", "TYPING"):
             room_type = str(payload.get("room_type", "")).upper()
             target = str(payload.get("target", "")).strip()
-            sender = str(payload.get("from", "")).strip()
+            sender = str(payload.get("from") or payload.get("sender") or "").strip()
             is_typing = payload.get("is_typing", False)
             if hasattr(self, "room_manager"):
                 self.room_manager.dispatch_typing(room_type, target, sender, is_typing)
+        
+        elif msg_type in (MSG_VOICE_MSG, "MSG_VOICE_MSG", "VOICE_MSG"):
+            room_type = str(payload.get("room_type", "")).upper()
+            target = str(payload.get("target") or payload.get("to") or payload.get("group") or "").strip()
+            sender = str(payload.get("from") or payload.get("sender") or payload.get("from_user") or "").strip()
+            audio_b64 = str(payload.get("audio_b64", "")).strip()
+            duration = float(payload.get("duration", 0.0))
+
+            # Ignore server echo back to sender (already rendered locally)
+            if sender and sender == self.own_username:
+                return
+
+            if hasattr(self, "room_manager"):
+                self.room_manager.dispatch_voice_message(room_type, target, sender, audio_b64, duration, ts)
 
     def destroy(self) -> None:
         """Stops the queue polling loop and cleans up open chat rooms and widgets."""
