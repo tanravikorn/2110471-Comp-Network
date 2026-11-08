@@ -11,6 +11,7 @@ from server.handlers.group import (
     handle_group_msg,
     handle_join_group,
 )
+from server.handlers.historyhandle import handle_get_history, handle_history
 from server.handlers.private_msg import handle_private_msg
 from server.handlers.register import broadcast_client_list, handle_register
 from server.handlers.typing import handle_typing
@@ -26,4 +27,6 @@ __all__ = [
     "handle_typing",
     "handle_voice_msg",
     "handle_ai_summary",
+    "handle_get_history",
+    "handle_history",
 ]

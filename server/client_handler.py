@@ -17,6 +17,7 @@ from common.protocol import (
     ERR_NOT_REGISTERED,
     KEY_PAYLOAD,
     KEY_TYPE,
+    GET_HISTORY,
     MSG_AI_SUMMARY_REQ,
     MSG_CLIENT_LIST,
     MSG_CREATE_GROUP,
@@ -37,6 +38,7 @@ from server.handlers import (
     handle_ai_summary,
     handle_create_group,
     handle_group_msg,
+    handle_get_history,
     handle_join_group,
     handle_private_msg,
     handle_register,
@@ -122,7 +124,11 @@ def handle_client(
             elif msg_type == MSG_VOICE_MSG:
                 handle_voice_msg(client_sock, payload, state, session)
 
-            # 8. AI Chat History Summarization (B1)
+            # 8. Chat History Retrieval
+            elif msg_type == GET_HISTORY:
+                handle_get_history(client_sock, payload, state, session)
+
+            # 9. AI Chat History Summarization (B1)
             elif msg_type == MSG_AI_SUMMARY_REQ:
                 handle_ai_summary(client_sock, payload, state, session)
 

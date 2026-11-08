@@ -31,6 +31,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from client.gui_chatroom import ChatRoomWindow
 from common.protocol import (
+    GET_HISTORY,
+    HISTORY_REPLY,
     KEY_PAYLOAD,
     KEY_TIMESTAMP,
     KEY_TYPE,
@@ -64,6 +66,7 @@ class ChatRoomManager:
             room = self.private_rooms[peer_username]
             if room.winfo_exists():
                 room.bring_to_front()
+                self._request_history(ROOM_PRIVATE, peer_username)
                 return room
 
         room = ChatRoomWindow(
@@ -75,6 +78,7 @@ class ChatRoomManager:
             on_close_callback=lambda _rt, target: self.private_rooms.pop(target, None),
         )
         self.private_rooms[peer_username] = room
+        self._request_history(ROOM_PRIVATE, peer_username)
         return room
 
     def get_or_create_group_room(self, group_name: str, members: Optional[List[str]] = None) -> ChatRoomWindow:
@@ -84,6 +88,7 @@ class ChatRoomManager:
                 if members:
                     room.set_participants(members)
                 room.bring_to_front()
+                self._request_history(ROOM_GROUP, group_name)
                 return room
 
         room = ChatRoomWindow(
@@ -97,7 +102,27 @@ class ChatRoomManager:
         if members:
             room.set_participants(members)
         self.group_rooms[group_name] = room
+        self._request_history(ROOM_GROUP, group_name)
         return room
+
+    def _request_history(self, room_type: str, target: str) -> None:
+        if hasattr(self.network_client, "send_get_history"):
+            self.network_client.send_get_history(room_type, target)
+        elif hasattr(self.network_client, "send_packet"):
+            self.network_client.send_packet(GET_HISTORY, {
+                "room_type": room_type,
+                "target": target,
+            })
+
+    def dispatch_history(self, room_type: str, target: str, history: Any) -> None:
+        if not isinstance(history, list):
+            return
+        if room_type == ROOM_PRIVATE:
+            room = self.private_rooms.get(target)
+        else:
+            room = self.group_rooms.get(target)
+        if room and room.winfo_exists():
+            room.render_history(history)
 
     def dispatch_private_message(self, sender: str, target: str, text: str, timestamp: str = "") -> None:
         peer = target if sender == self.own_username else sender
@@ -523,6 +548,12 @@ class LobbyWindow(ttk.Frame):
             text = payload.get("text", "")
             if group and sender and hasattr(self, "room_manager"):
                 self.room_manager.dispatch_group_message(group, sender, text, ts)
+        elif msg_type in (GET_HISTORY, HISTORY_REPLY, "GET_HISTORY", "HISTORY_REPLY"):
+            room_type = str(payload.get("room_type", "")).upper()
+            target = str(payload.get("target", "")).strip()
+            history = payload.get("history", [])
+            if room_type in (ROOM_PRIVATE, ROOM_GROUP) and target and hasattr(self, "room_manager"):
+                self.room_manager.dispatch_history(room_type, target, history)
         elif msg_type in (MSG_ERROR, "MSG_ERROR", "ERROR"):
             err_msg = payload.get("message", "An error occurred.")
             try:

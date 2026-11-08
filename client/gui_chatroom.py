@@ -403,6 +403,36 @@ class ChatRoomWindow(tk.Toplevel):
             is_system=False,
         )
 
+    def render_history(self, history: List[Dict[str, Any]]) -> None:
+        """Renders recorded messages into the chat widget before live messages arrive."""
+        def _render():
+            if not self.winfo_exists():
+                return
+            self.chat_display.configure(state="normal")
+            self.chat_display.delete("1.0", tk.END)
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                sender = str(item.get("sender", "System")).strip() or "System"
+                text = str(item.get("text", "")).strip()
+                timestamp = str(item.get("timestamp", "")).strip()
+                if not text:
+                    continue
+
+                is_self = sender.lower() == self.own_username.lower()
+                if is_self:
+                    ts_str = f" • {timestamp}" if timestamp else ""
+                    self.chat_display.insert(tk.END, f"You{ts_str}\n", ("self_header", "own_header"))
+                    self.chat_display.insert(tk.END, f"{text}\n\n", ("self_msg", "own_msg"))
+                else:
+                    ts_str = f" • {timestamp}" if timestamp else ""
+                    self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
+                    self.chat_display.insert(tk.END, f"{text}\n\n", ("other_msg",))
+            self.chat_display.configure(state="disabled")
+            self.chat_display.see(tk.END)
+
+        self._run_on_ui_thread(_render)
+
     def _display_message_main(
         self,
         sender: str,

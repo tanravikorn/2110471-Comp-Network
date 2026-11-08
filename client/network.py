@@ -17,6 +17,7 @@ from common.protocol import (
     MSG_JOIN_GROUP,
     MSG_PRIVATE,
     MSG_REGISTER,
+    GET_HISTORY,
     MSG_TYPING,
     MSG_VOICE_MSG,
     SocketLineBuffer,
@@ -100,6 +101,10 @@ class NetworkClient:
     def send_group_message(self, group_name: str, text: str) -> None:
         """Transmits group room message packet (R11)."""
         self.send_packet(MSG_GROUP, {"group": group_name, "text": text})
+
+    def send_get_history(self, room_type: str, target: str) -> None:
+        """Requests recorded chat history for a private or group room."""
+        self.send_packet(GET_HISTORY, {"room_type": room_type, "target": target})
 
     def send_typing(self, room_type: str, target: str, is_typing: bool) -> None:
         """Transmits typing status packet (B3)."""
