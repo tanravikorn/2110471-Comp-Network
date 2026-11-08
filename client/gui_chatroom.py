@@ -4,6 +4,7 @@ Purpose: Reusable Tkinter Toplevel Chat Room Window UI Component for Requirement
 Mapped Requirements:
   - R5 (Separate Chat Rooms): Dedicated chat room window (`tk.Toplevel`).
   - R6 (Chat Box & Chat Window): Read-only ScrolledText message display & Entry input box.
+  - B1 (AI Summary): Request button, loading state, and formatted AI conversation summary card.
   - B3 (Typing Indicator): Real-time multi-user typing status rendered directly inside chat history stream.
   - B4 (Voice Messages): Push-to-talk voice clip recording, Base64 transmission, replay, and playback.
 """
@@ -28,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from common.protocol import (
+    MSG_AI_SUMMARY_REQ,
     MSG_GROUP,
     MSG_PRIVATE,
     MSG_TYPING,
@@ -58,7 +60,11 @@ class ChatRoomWindow(tk.Toplevel):
     ) -> None:
         super().__init__(parent)
 
-        if callable(network_client) and on_send_message_callback is None:
+        if (
+            callable(network_client)
+            and not hasattr(network_client, "send_packet")
+            and on_send_message_callback is None
+        ):
             on_send_message_callback = network_client
             network_client = None
 
@@ -89,6 +95,10 @@ class ChatRoomWindow(tk.Toplevel):
         self._voice_auto_stop_timer: Optional[str] = None
         self._stream: Optional[Any] = None
 
+        # AI Summary request state (B1)
+        self._is_requesting_summary: bool = False
+        self._summary_timeout_job: Optional[str] = None
+
         # Thread-safe UI dispatch queue
         self._ui_queue: queue.Queue[Tuple[Callable[..., Any], Tuple[Any, ...]]] = queue.Queue()
         self._poll_job: Optional[str] = None
@@ -101,13 +111,13 @@ class ChatRoomWindow(tk.Toplevel):
 
         # Configure window properties
         self._update_window_title()
-        self.geometry("520x600")
-        self.minsize(420, 460)
+        self.geometry("560x600")
+        self.minsize(460, 460)
 
         # Handle window close protocol (WM_DELETE_WINDOW)
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
-        # Build UI layout & tags (R6, B3, B4)
+        # Build UI layout & tags (R6, B1, B3, B4)
         self._build_ui()
         self._configure_tags()
 
@@ -142,11 +152,11 @@ class ChatRoomWindow(tk.Toplevel):
             self._ui_queue.put((fn, args))
 
     # =========================================================================
-    # UI Layout & Widget Creation (R5, R6, B4)
+    # UI Layout & Widget Creation (R5, R6, B1, B4)
     # =========================================================================
 
     def _build_ui(self) -> None:
-        """Constructs all GUI sub-components for R5, R6, and B4."""
+        """Constructs all GUI sub-components for R5, R6, B1, and B4."""
         self.configure(bg="#F4F6F9")
 
         # 1. Title Header Bar (R5)
@@ -197,7 +207,7 @@ class ChatRoomWindow(tk.Toplevel):
         )
         self.chat_display.pack(fill="both", expand=True)
 
-        # 3. Message Input Area (R6 Chat Box & B4 Voice Button)
+        # 3. Message Input Area (R6 Chat Box, B4 Voice Button, & B1 AI Summary Button)
         self.input_frame = tk.Frame(self, bg="#FFFFFF", padx=10, pady=10, relief="groove", bd=1)
         self.input_frame.pack(side="bottom", fill="x")
 
@@ -226,6 +236,14 @@ class ChatRoomWindow(tk.Toplevel):
         )
         self.voice_button.pack(side="right", padx=(0, 4))
 
+        # AI Summary Button (B1) placed next to Voice Message Button
+        self.ai_summary_button = ttk.Button(
+            self.input_frame,
+            text="✨ AI Summary",
+            command=self.request_ai_summary,
+        )
+        self.ai_summary_button.pack(side="right", padx=(0, 4))
+
         self._focus_job: Optional[str] = self.after(50, self._focus_entry)
 
     def _focus_entry(self) -> None:
@@ -234,7 +252,7 @@ class ChatRoomWindow(tk.Toplevel):
             self.message_entry.focus_set()
 
     def _configure_tags(self) -> None:
-        """Configures Tkinter text tags for formatting message styles (R6, B3, B4)."""
+        """Configures Tkinter text tags for formatting message styles (R6, B1, B3, B4)."""
         for tag in ("self_header", "own_header"):
             self.chat_display.tag_config(
                 tag,
@@ -311,6 +329,40 @@ class ChatRoomWindow(tk.Toplevel):
             font=("Segoe UI", 9, "italic"),
             spacing1=3,
             spacing3=3,
+        )
+
+        # AI Conversation Summary tags (B1)
+        self.chat_display.tag_config(
+            "ai_summary_status",
+            justify="center",
+            foreground="#6B46C1",
+            font=("Segoe UI", 9, "italic"),
+            spacing1=3,
+            spacing3=3,
+        )
+        self.chat_display.tag_config(
+            "ai_summary_header",
+            justify="left",
+            foreground="#4C51BF",
+            background="#EBF4FF",
+            font=("Segoe UI", 9, "bold"),
+            lmargin1=16,
+            lmargin2=16,
+            rmargin=16,
+            spacing1=6,
+            spacing3=2,
+        )
+        self.chat_display.tag_config(
+            "ai_summary_body",
+            justify="left",
+            foreground="#2D3748",
+            background="#F7FAFC",
+            font=("Segoe UI", 10),
+            lmargin1=16,
+            lmargin2=16,
+            rmargin=16,
+            spacing1=2,
+            spacing3=6,
         )
 
     # =========================================================================
@@ -515,6 +567,122 @@ class ChatRoomWindow(tk.Toplevel):
             self.chat_display.configure(state="disabled")
 
         self._run_on_ui_thread(_clear)
+
+    # =========================================================================
+    # AI Conversation Summary Handlers (B1)
+    # =========================================================================
+
+    def request_ai_summary(self) -> None:
+        """Transmits AI_SUMMARY_REQ for the current room and displays loading feedback (B1)."""
+        if getattr(self, "_is_requesting_summary", False):
+            return
+
+        self._is_requesting_summary = True
+        if hasattr(self, "ai_summary_button") and self.ai_summary_button.winfo_exists():
+            self.ai_summary_button.configure(text="⏳ Summarizing...", state="disabled")
+
+        ts = get_current_timestamp()
+        self.chat_display.configure(state="normal")
+        for tag_name in ("ai_summary_status", "typing_indicator"):
+            ranges = self.chat_display.tag_ranges(tag_name)
+            if ranges:
+                self.chat_display.delete(ranges[0], ranges[1])
+        self.chat_display.insert(
+            tk.END,
+            f"[{ts}] ✨ Generating AI conversation summary...\n\n",
+            ("ai_summary_status",),
+        )
+        self._render_typing_indicator_line()
+        self.chat_display.configure(state="disabled")
+        self.chat_display.see(tk.END)
+
+        if self._summary_timeout_job:
+            try:
+                self.after_cancel(self._summary_timeout_job)
+            except Exception:
+                pass
+        self._summary_timeout_job = self.after(15000, self.clear_ai_summary_loading)
+
+        if self.network_client:
+            if hasattr(self.network_client, "send_ai_summary_request"):
+                self.network_client.send_ai_summary_request(self.room_type, self.target_name)
+            elif hasattr(self.network_client, "send_packet"):
+                self.network_client.send_packet(
+                    MSG_AI_SUMMARY_REQ,
+                    {"room_type": self.room_type, "target": self.target_name},
+                )
+
+    def clear_ai_summary_loading(self) -> None:
+        """Clears the temporary AI summary loading status and re-enables the button (B1)."""
+        def _clear_loading():
+            if not self.winfo_exists():
+                return
+            self._is_requesting_summary = False
+            if self._summary_timeout_job:
+                try:
+                    self.after_cancel(self._summary_timeout_job)
+                except Exception:
+                    pass
+                self._summary_timeout_job = None
+
+            if hasattr(self, "ai_summary_button") and self.ai_summary_button.winfo_exists():
+                self.ai_summary_button.configure(text="✨ AI Summary", state="normal")
+
+            self.chat_display.configure(state="normal")
+            ranges = self.chat_display.tag_ranges("ai_summary_status")
+            if ranges:
+                self.chat_display.delete(ranges[0], ranges[1])
+            self.chat_display.configure(state="disabled")
+
+        self._run_on_ui_thread(_clear_loading)
+
+    def display_ai_summary(
+        self,
+        summary: str,
+        requested_by: str = "",
+        timestamp: str = "",
+    ) -> None:
+        """Renders an incoming AI conversation summary inside the chat stream (B1)."""
+        def _render_summary():
+            if not self.winfo_exists():
+                return
+
+            self._is_requesting_summary = False
+            if self._summary_timeout_job:
+                try:
+                    self.after_cancel(self._summary_timeout_job)
+                except Exception:
+                    pass
+                self._summary_timeout_job = None
+
+            if hasattr(self, "ai_summary_button") and self.ai_summary_button.winfo_exists():
+                self.ai_summary_button.configure(text="✨ AI Summary", state="normal")
+
+            ts = timestamp if timestamp else get_current_timestamp()
+            requester_label = (
+                "You"
+                if requested_by and requested_by.lower() == self.own_username.lower()
+                else (requested_by or "Participant")
+            )
+
+            self.chat_display.configure(state="normal")
+            for tag_name in ("ai_summary_status", "typing_indicator"):
+                ranges = self.chat_display.tag_ranges(tag_name)
+                if ranges:
+                    self.chat_display.delete(ranges[0], ranges[1])
+
+            header_line = f"✨ AI Chat Summary (requested by {requester_label}) • {ts}\n"
+            body_line = f"{summary.strip()}\n\n"
+
+            self.chat_display.insert(tk.END, header_line, ("ai_summary_header",))
+            self.chat_display.insert(tk.END, body_line, ("ai_summary_body",))
+
+            self._render_typing_indicator_line()
+
+            self.chat_display.configure(state="disabled")
+            self.chat_display.see(tk.END)
+
+        self._run_on_ui_thread(_render_summary)
 
     # =========================================================================
     # Multi-User Typing Indicator Handlers (B3)
@@ -909,7 +1077,7 @@ class ChatRoomWindow(tk.Toplevel):
     # =========================================================================
 
     def destroy(self) -> None:
-        """Cleanly stops voice stream, cancels scheduled timers, and notifies server if typing (B3, B4)."""
+        """Cleanly stops voice stream, cancels scheduled timers, and notifies server if typing (B1, B3, B4)."""
         if getattr(self, "_is_typing_active", False):
             self._stop_typing_status()
 
@@ -923,7 +1091,7 @@ class ChatRoomWindow(tk.Toplevel):
                     pass
                 self._stream = None
 
-        for job_attr in ("_typing_timer", "_focus_job", "_poll_job", "_voice_auto_stop_timer"):
+        for job_attr in ("_typing_timer", "_focus_job", "_poll_job", "_voice_auto_stop_timer", "_summary_timeout_job"):
             job = getattr(self, job_attr, None)
             if job:
                 try:

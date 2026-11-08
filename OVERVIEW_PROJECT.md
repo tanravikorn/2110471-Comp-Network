@@ -2,7 +2,7 @@
 
 **Document Status:** Active
 **Last Synchronized:** 2026-11-08
-**Current Sprint / Phase:** Client In-Memory Voice Cache & Bonus Features Completed (48/48 Tests Passing)
+**Current Sprint / Phase:** Bonus B1 (Server + Client AI Summary) & Cloud VPS Hardening Completed (50/50 Tests Passing)
 
 ---
 
@@ -31,10 +31,10 @@
 - **R11 (1.0) [Group]:** Each client can send a text message to a group they have joined. **Only the members of that chat group** can see the messages.
 
 ### Part 3: Bonus / Special Features (1.5 points)
-- **B1 [AI Summary]:** Server stores per-room chat history in memory and summarizes the conversation on request (`AI_SUMMARY_REQ`) using Google Gemini REST API (`server/ai_service.py`), broadcasting the summary (`AI_SUMMARY_RES`) to all participants in that room, with offline heuristic fallback when API key is unset.
+- **B1 [AI Summary]:** Server stores per-room chat history in memory and summarizes the conversation on request (`AI_SUMMARY_REQ`) using Google Gemini REST API (`server/ai_service.py`), broadcasting the summary (`AI_SUMMARY_RES`) to all participants in that room, with offline heuristic fallback when API key is unset. Client chat rooms include an `✨ AI Summary` button next to the Voice button to request and render formatted summaries inline.
 - **B2 [Cloud VPS Deployment]:** Server binds to `0.0.0.0` on a Cloud VPS with an open TCP firewall port so clients on any network can connect via the VPS Public IP.
 - **B3 [Typing Indicator]:** Discord-style real-time `"<user> is typing..."` status bar (`TYPING`) in both Private and Group chat rooms, with automatic debounce/timeout after 3 seconds of inactivity or upon sending a message.
-- **B4 [Voice Message]:** Push-to-talk / recorded `.wav` audio clips (`client/audio.py`) encoded in Base64 (`VOICE_MSG`) and sent over the same TCP JSON connection for playback inside Private and Group chat rooms.
+- **B4 [Voice Message]:** Push-to-talk / recorded `.wav` audio clips (`client/audio.py`) encoded in Base64 (`VOICE_MSG`) and sent over the same TCP JSON connection for playback inside Private and Group chat rooms, with client-side room cache preserving text and voice clips on window reopen.
 
 ---
 
@@ -44,8 +44,8 @@
   - **Application Protocol Layer:** Newline-delimited (`\n`) UTF-8 JSON messages using a standardized 3-key Envelope (`type`, `timestamp`, `payload`).
 - **Frontend (Client GUI):** Python `tkinter` & `tkinter.ttk`
   - **Login Window (`client/gui_login.py`):** Server IP (LAN or Cloud VPS Public IP), Port, and unique Username input.
-  - **Main Lobby (`client/gui_lobby.py`):** Displays online clients (`R4`) and all groups with member lists (`R9`), plus controls to open Private Chats (`R5`), Create Group (`R8`), Join Group (`R10`), and in-memory room/voice caching via `ChatRoomManager` (`B4`).
-  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), Typing Indicator status bar (`B3`), and Voice Message recorder/player with cached replay support (`B4`).
+  - **Main Lobby (`client/gui_lobby.py`):** Displays online clients (`R4`) and all groups with member lists (`R9`), plus controls to open Private Chats (`R5`), Create Group (`R8`), Join Group (`R10`), and routes incoming `AI_SUMMARY_RES` (`B1`), `TYPING` (`B3`), and `VOICE_MSG` (`B4`) packets.
+  - **Chat Room Window (`client/gui_chatroom.py`):** Separate `tk.Toplevel` window per Private peer or joined Group (`R5`), with message history display, input box (`R6`), `✨ AI Summary` button & summary display (`B1`), Typing Indicator status bar (`B3`), and Voice Message recorder/player (`B4`).
   - **Audio Helper (`client/audio.py`):** Records/plays short `.wav` voice clips and converts between raw audio bytes and Base64 strings (`B4`).
 - **Backend (Server):** Python `socket` + `threading`
   - One main listening thread accepting connections (`server/server.py`).
@@ -94,8 +94,8 @@
   │   ├── network.py             # Client TCP socket thread & thread-safe UI queue (R2, B1, B3, B4)
   │   ├── audio.py               # WAV voice clip recording, playback & Base64 encoding/decoding (B4)
   │   ├── gui_login.py           # Login dialog for Server IP (LAN/VPS), port & unique username (R1, R3, B2)
-  │   ├── gui_lobby.py           # Lobby window for online client directory & group directory (R4, R8-R10)
-  │   └── gui_chatroom.py        # Dedicated chat room window per peer/group (R5, R6, B3, B4)
+  │   ├── gui_lobby.py           # Lobby window for online client directory, group directory & packet routing (R4, R8-R10, B1, B3, B4)
+  │   └── gui_chatroom.py        # Dedicated chat room window per peer/group (R5, R6, B1, B3, B4)
   └── tests/
       ├── test_socket_r2.py
       ├── test_handler_register.py
@@ -103,5 +103,6 @@
       ├── test_client_requirements.py
       ├── test_typing.py
       ├── test_audio.py
-      └── test_ai_summary.py
+      ├── test_ai_summary.py
+      └── test_vps_hardening.py
   ```
