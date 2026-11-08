@@ -2,24 +2,27 @@
 Module: client/gui_chatroom.py
 Purpose: Reusable Tkinter Toplevel Chat Room Window UI Component for Requirements R5 and R6
 Mapped Requirements:
-  - R5 (Separate Chat Rooms): Each chat between clients (both Private 1-on-1 and Group message)
-    has its own dedicated chat room window (`tk.Toplevel`).
-  - R6 (Chat Box & Chat Window): Each chat room includes a scrollable, read-only chat display window
-    (`ScrolledText`) configured to auto-scroll when new messages arrive, and a chat box (`ttk.Entry`
-    paired with a "Send" `ttk.Button`) bound to the <Return> key for sending text messages.
+  - R5 (Separate Chat Rooms): Dedicated chat room window (`tk.Toplevel`).
+  - R6 (Chat Box & Chat Window): Read-only ScrolledText message display & Entry input box.
+  - B3 (Typing Indicator): Real-time multi-user typing status rendered directly inside chat history stream.
+  - B4 (Voice Messages): Push-to-talk voice clip recording, Base64 transmission, replay, and playback.
 """
 
 from __future__ import annotations
 
+import base64
+import os
 import queue
+import subprocess
 import sys
+import tempfile
 import threading
+import time
 from pathlib import Path
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-# Ensure project root is in sys.path so common modules can be imported standalone
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -27,6 +30,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from common.protocol import (
     MSG_GROUP,
     MSG_PRIVATE,
+    MSG_TYPING,
+    MSG_VOICE_MSG,
     ROOM_GROUP,
     ROOM_PRIVATE,
     get_current_timestamp,
@@ -37,7 +42,6 @@ class ChatRoomWindow(tk.Toplevel):
     """
     Dedicated Tkinter Toplevel window representing a single chat room.
     Supports both 1-on-1 Private chats and multi-user Group chats (R5).
-    Features a read-only auto-scrolling message display and an input area (R6).
     """
 
     def __init__(
@@ -51,20 +55,8 @@ class ChatRoomWindow(tk.Toplevel):
         on_send_message_callback: Optional[Callable[[str, str], None]] = None,
         **kwargs: Any,
     ) -> None:
-        """
-        Initializes the ChatRoomWindow.
-
-        :param parent: Parent Tk widget (e.g. LobbyWindow or Tk root).
-        :param room_type: ROOM_PRIVATE ("PRIVATE") or ROOM_GROUP ("GROUP") (R5).
-        :param target_name: Peer username (for Private) or Group name (for Group).
-        :param own_username: Username of the current client.
-        :param network_client: Optional NetworkClient instance for direct transmission.
-        :param on_close_callback: Cleanup callback invoked when window is closed (WM_DELETE_WINDOW).
-        :param on_send_message_callback: Callback invoked when a message is sent (target, text).
-        """
         super().__init__(parent)
 
-        # Accommodate flexible positional/keyword arguments
         if callable(network_client) and on_send_message_callback is None:
             on_send_message_callback = network_client
             network_client = None
@@ -80,6 +72,18 @@ class ChatRoomWindow(tk.Toplevel):
         self.network_client = network_client
         self.on_close_callback = on_close_callback
         self.on_send_message_callback = on_send_message_callback
+
+        # Real-time typing status state (B3)
+        self._typing_timer: Optional[str] = None
+        self._is_typing_active: bool = False
+        self._active_typers: set[str] = set()  # Multi-user typing set
+
+        # Voice message recording state (B4)
+        self._is_recording_voice: bool = False
+        self._voice_start_time: float = 0.0
+        self._temp_voice_file: str = ""
+        self._voice_auto_stop_timer: Optional[str] = None
+        self._stream: Optional[Any] = None
 
         # Thread-safe UI dispatch queue
         self._ui_queue: queue.Queue[Tuple[Callable[..., Any], Tuple[Any, ...]]] = queue.Queue()
@@ -99,7 +103,7 @@ class ChatRoomWindow(tk.Toplevel):
         # Handle window close protocol (WM_DELETE_WINDOW)
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
 
-        # Build UI layout & tags (R6)
+        # Build UI layout & tags (R6, B3, B4)
         self._build_ui()
         self._configure_tags()
 
@@ -134,16 +138,14 @@ class ChatRoomWindow(tk.Toplevel):
             self._ui_queue.put((fn, args))
 
     # =========================================================================
-    # UI Layout & Widget Creation (R5, R6)
+    # UI Layout & Widget Creation (R5, R6, B4)
     # =========================================================================
 
     def _build_ui(self) -> None:
-        """Constructs all GUI sub-components for R5 and R6."""
+        """Constructs all GUI sub-components for R5, R6, and B4."""
         self.configure(bg="#F4F6F9")
 
-        # ---------------------------------------------------------------------
         # 1. Title Header Bar (R5)
-        # ---------------------------------------------------------------------
         self.header_frame = tk.Frame(self, bg="#FFFFFF", padx=14, pady=10, relief="groove", bd=1)
         self.header_frame.pack(side="top", fill="x")
 
@@ -171,9 +173,7 @@ class ChatRoomWindow(tk.Toplevel):
         )
         self.header_subtitle_label.pack(anchor="w", pady=(2, 0))
 
-        # ---------------------------------------------------------------------
         # 2. Chat Display Area (R6 Chat Window)
-        # ---------------------------------------------------------------------
         self.chat_display_frame = tk.Frame(self, bg="#F4F6F9", padx=10, pady=8)
         self.chat_display_frame.pack(side="top", fill="both", expand=True)
 
@@ -193,23 +193,20 @@ class ChatRoomWindow(tk.Toplevel):
         )
         self.chat_display.pack(fill="both", expand=True)
 
-        # ---------------------------------------------------------------------
-        # 3. Message Input Area (R6 Chat Box)
-        # ---------------------------------------------------------------------
+        # 3. Message Input Area (R6 Chat Box & B4 Voice Button)
         self.input_frame = tk.Frame(self, bg="#FFFFFF", padx=10, pady=10, relief="groove", bd=1)
         self.input_frame.pack(side="bottom", fill="x")
 
-        # Entry for typing message
         self.message_entry = ttk.Entry(
             self.input_frame,
             font=("Segoe UI", 10),
         )
         self.message_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
 
-        # Keyboard <Return> binding (R6)
+        # Keypress & Return bindings (R6, B3)
+        self.message_entry.bind("<Key>", self._on_key_press)
         self.message_entry.bind("<Return>", self._on_return)
 
-        # Send Button (R6)
         self.send_button = ttk.Button(
             self.input_frame,
             text="Send",
@@ -217,7 +214,14 @@ class ChatRoomWindow(tk.Toplevel):
         )
         self.send_button.pack(side="right")
 
-        # Focus entry immediately for smooth typing
+        # Voice Message Button (B4)
+        self.voice_button = ttk.Button(
+            self.input_frame,
+            text="🎤 Record Voice",
+            command=self._toggle_voice_recording,
+        )
+        self.voice_button.pack(side="right", padx=(0, 4))
+
         self._focus_job: Optional[str] = self.after(50, self._focus_entry)
 
     def _focus_entry(self) -> None:
@@ -226,8 +230,7 @@ class ChatRoomWindow(tk.Toplevel):
             self.message_entry.focus_set()
 
     def _configure_tags(self) -> None:
-        """Configures Tkinter text tags for formatting message styles (R6)."""
-        # 1. Own / Self Messages (Right-aligned, Blue theme #1976D2)
+        """Configures Tkinter text tags for formatting message styles (R6, B3, B4)."""
         for tag in ("self_header", "own_header"):
             self.chat_display.tag_config(
                 tag,
@@ -250,7 +253,6 @@ class ChatRoomWindow(tk.Toplevel):
                 lmargin2=60,
             )
 
-        # 2. Other Users' Messages (Left-aligned, bold sender name)
         self.chat_display.tag_config(
             "other_header",
             justify="left",
@@ -271,7 +273,6 @@ class ChatRoomWindow(tk.Toplevel):
                 rmargin=60,
             )
 
-        # 3. System Messages (Centered, muted color #757575, italic)
         for tag in ("system", "system_msg"):
             self.chat_display.tag_config(
                 tag,
@@ -282,11 +283,30 @@ class ChatRoomWindow(tk.Toplevel):
                 spacing3=3,
             )
 
-        # 4. Timestamp auxiliary tag
         self.chat_display.tag_config(
             "timestamp",
             foreground="#888888",
             font=("Segoe UI", 8),
+        )
+
+        # Real-time Multi-User Typing Indicator tag (B3)
+        self.chat_display.tag_config(
+            "typing_indicator",
+            justify="left",
+            foreground="#3182CE",
+            font=("Segoe UI", 9, "italic"),
+            lmargin1=12,
+            lmargin2=12,
+        )
+
+        # Temporary Recording Status Indicator tag (B4)
+        self.chat_display.tag_config(
+            "recording_status",
+            justify="center",
+            foreground="#757575",
+            font=("Segoe UI", 9, "italic"),
+            spacing1=3,
+            spacing3=3,
         )
 
     # =========================================================================
@@ -333,7 +353,7 @@ class ChatRoomWindow(tk.Toplevel):
         title: Optional[str] = None,
         subtitle: Optional[str] = None,
     ) -> None:
-        """Directly updates the title and/or subtitle of the room header (thread-safe)."""
+        """Directly updates title/subtitle of header (thread-safe)."""
         def _update():
             if not self.winfo_exists():
                 return
@@ -348,7 +368,7 @@ class ChatRoomWindow(tk.Toplevel):
         self._run_on_ui_thread(_update)
 
     def bring_to_front(self) -> None:
-        """Restores and focuses the window if minimized or in background (thread-safe)."""
+        """Restores and focuses the window (thread-safe)."""
         def _focus():
             if not self.winfo_exists():
                 return
@@ -374,15 +394,7 @@ class ChatRoomWindow(tk.Toplevel):
         is_self: bool = False,
         is_system: bool = False,
     ) -> None:
-        """
-        Appends a message to the chat display in a thread-safe manner (R6).
-
-        :param sender: Name of message sender (or "System").
-        :param message: Text content of the message.
-        :param timestamp: Formatted timestamp ("HH:MM:SS"). Defaults to current time.
-        :param is_self: True if sent by current user (right-aligned).
-        :param is_system: True if system event notification (centered).
-        """
+        """Appends a message to the chat display in a thread-safe manner (R6)."""
         self._run_on_ui_thread(
             self._display_message_main,
             sender,
@@ -393,7 +405,7 @@ class ChatRoomWindow(tk.Toplevel):
         )
 
     def append_message(self, sender: str, text: str, timestamp: str = "") -> None:
-        """Alias for display_message matching LobbyWindow dispatcher expectations (R6)."""
+        """Alias for display_message matching LobbyWindow dispatcher (R6)."""
         is_self = (sender == self.own_username)
         self.display_message(
             sender=sender,
@@ -404,13 +416,19 @@ class ChatRoomWindow(tk.Toplevel):
         )
 
     def render_history(self, history: List[Dict[str, Any]]) -> None:
-        """Renders recorded messages into the chat widget before live messages arrive."""
+        """Renders recorded history at top without deleting live messages or voice clips (B1, B4)."""
         def _render():
             if not self.winfo_exists():
                 return
+
+            if getattr(self, "_history_rendered", False):
+                return
+            self._history_rendered = True
+
             self.chat_display.configure(state="normal")
-            self.chat_display.delete("1.0", tk.END)
-            for item in history:
+            existing_text = self.chat_display.get("1.0", tk.END)
+
+            for item in reversed(history):
                 if not isinstance(item, dict):
                     continue
                 sender = str(item.get("sender", "System")).strip() or "System"
@@ -419,15 +437,19 @@ class ChatRoomWindow(tk.Toplevel):
                 if not text:
                     continue
 
+                if text in existing_text:
+                    continue
+
                 is_self = sender.lower() == self.own_username.lower()
+                ts_str = f" • {timestamp}" if timestamp else ""
+
                 if is_self:
-                    ts_str = f" • {timestamp}" if timestamp else ""
-                    self.chat_display.insert(tk.END, f"You{ts_str}\n", ("self_header", "own_header"))
-                    self.chat_display.insert(tk.END, f"{text}\n\n", ("self_msg", "own_msg"))
+                    self.chat_display.insert("1.0", f"{text}\n\n", ("self_msg", "own_msg"))
+                    self.chat_display.insert("1.0", f"You{ts_str}\n", ("self_header", "own_header"))
                 else:
-                    ts_str = f" • {timestamp}" if timestamp else ""
-                    self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
-                    self.chat_display.insert(tk.END, f"{text}\n\n", ("other_msg",))
+                    self.chat_display.insert("1.0", f"{text}\n\n", ("other_msg",))
+                    self.chat_display.insert("1.0", f"{sender}{ts_str}\n", ("other_header",))
+
             self.chat_display.configure(state="disabled")
             self.chat_display.see(tk.END)
 
@@ -451,7 +473,14 @@ class ChatRoomWindow(tk.Toplevel):
         if sender == self.own_username or sender.lower() == self.own_username.lower() or sender == "You":
             is_self = True
 
+        if hasattr(self, "_active_typers"):
+            self._active_typers.discard(sender)
+
         self.chat_display.configure(state="normal")
+
+        ranges = self.chat_display.tag_ranges("typing_indicator")
+        if ranges:
+            self.chat_display.delete(ranges[0], ranges[1])
 
         if is_system:
             ts_str = f"[{timestamp}] " if timestamp else ""
@@ -465,6 +494,8 @@ class ChatRoomWindow(tk.Toplevel):
             self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
             self.chat_display.insert(tk.END, f"{message}\n\n", ("other_msg",))
 
+        self._render_typing_indicator_line()
+
         self.chat_display.configure(state="disabled")
         self.chat_display.see(tk.END)
 
@@ -473,11 +504,328 @@ class ChatRoomWindow(tk.Toplevel):
         def _clear():
             if not self.winfo_exists():
                 return
+            if hasattr(self, "_active_typers"):
+                self._active_typers.clear()
             self.chat_display.configure(state="normal")
             self.chat_display.delete("1.0", tk.END)
             self.chat_display.configure(state="disabled")
 
         self._run_on_ui_thread(_clear)
+
+    # =========================================================================
+    # Multi-User Typing Indicator Handlers (B3)
+    # =========================================================================
+
+    def _on_key_press(self, event: Optional[tk.Event] = None) -> None:
+        """Sends is_typing=True on keypress and sets a 3-second auto-stop timer (B3)."""
+        if event and event.keysym in ("Return", "Tab", "Escape"):
+            return
+
+        if not self._is_typing_active and self.network_client:
+            self._is_typing_active = True
+            if hasattr(self.network_client, "send_typing"):
+                self.network_client.send_typing(self.room_type, self.target_name, True)
+            elif hasattr(self.network_client, "send_packet"):
+                self.network_client.send_packet(MSG_TYPING, {
+                    "room_type": self.room_type,
+                    "target": self.target_name,
+                    "from": self.own_username,
+                    "sender": self.own_username,
+                    "is_typing": True,
+                })
+
+        if self._typing_timer:
+            try:
+                self.after_cancel(self._typing_timer)
+            except Exception:
+                pass
+        self._typing_timer = self.after(3000, self._stop_typing_status)
+
+    def _stop_typing_status(self) -> None:
+        """Notifies server that typing has stopped and cancels pending timer (B3)."""
+        if self._typing_timer:
+            try:
+                self.after_cancel(self._typing_timer)
+            except Exception:
+                pass
+            self._typing_timer = None
+
+        if getattr(self, "_is_typing_active", False) and self.network_client:
+            self._is_typing_active = False
+            if hasattr(self.network_client, "send_typing"):
+                self.network_client.send_typing(self.room_type, self.target_name, False)
+            elif hasattr(self.network_client, "send_packet"):
+                self.network_client.send_packet(MSG_TYPING, {
+                    "room_type": self.room_type,
+                    "target": self.target_name,
+                    "from": self.own_username,
+                    "sender": self.own_username,
+                    "is_typing": False,
+                })
+
+    def _render_typing_indicator_line(self) -> None:
+        """Formats and renders typing indicator text based on all active typing users (B3)."""
+        ranges = self.chat_display.tag_ranges("typing_indicator")
+        if ranges:
+            self.chat_display.delete(ranges[0], ranges[1])
+
+        if hasattr(self, "_active_typers") and self._active_typers:
+            typers_list = sorted(list(self._active_typers))
+            count = len(typers_list)
+
+            if count == 1:
+                text_str = f"✍ {typers_list[0]} is typing..."
+            elif count == 2:
+                text_str = f"✍ {typers_list[0]} and {typers_list[1]} are typing..."
+            elif count == 3:
+                text_str = f"✍ {typers_list[0]}, {typers_list[1]}, and {typers_list[2]} are typing..."
+            else:
+                text_str = f"✍ {typers_list[0]}, {typers_list[1]}, and {count - 2} others are typing..."
+
+            self.chat_display.insert(tk.END, f"{text_str}\n\n", ("typing_indicator",))
+
+    def set_typing_status(self, sender: str, is_typing: bool) -> None:
+        """Tracks multiple typing users by username and updates group typing indicator (B3)."""
+        def _update():
+            if not self.winfo_exists():
+                return
+
+            if not hasattr(self, "_active_typers"):
+                self._active_typers = set()
+
+            if sender.lower() == self.own_username.lower() or sender == "You":
+                return
+
+            if is_typing:
+                self._active_typers.add(sender)
+            else:
+                self._active_typers.discard(sender)
+
+            self.chat_display.configure(state="normal")
+            self._render_typing_indicator_line()
+            self.chat_display.configure(state="disabled")
+            self.chat_display.see(tk.END)
+
+        self._run_on_ui_thread(_update)
+
+    # =========================================================================
+    # Voice Message Handlers & Replay (B4)
+    # =========================================================================
+
+    def _toggle_voice_recording(self) -> None:
+        """Toggles push-to-talk voice recording on/off (B4)."""
+        if self._is_recording_voice:
+            self._stop_voice_recording()
+        else:
+            self._start_voice_recording()
+
+    def _start_voice_recording(self) -> None:
+        """Starts recording audio clip and sets 30-second auto-stop cap (B4)."""
+        try:
+            import sounddevice as sd
+        except ImportError:
+            self.display_message("System", "⚠ Please install sounddevice: pip install sounddevice numpy scipy", is_system=True)
+            return
+
+        self._is_recording_voice = True
+        self._voice_start_time = time.time()
+        self.voice_button.configure(text="⏹ Stop & Send")
+
+        self._voice_auto_stop_timer = self.after(30000, self._stop_voice_recording)
+
+        ts = get_current_timestamp()
+        self.chat_display.configure(state="normal")
+        ranges = self.chat_display.tag_ranges("recording_status")
+        if ranges:
+            self.chat_display.delete(ranges[0], ranges[1])
+        self.chat_display.insert(tk.END, f"[{ts}] 🎙 Recording voice message (max 30s)...\n\n", ("recording_status",))
+        self.chat_display.configure(state="disabled")
+        self.chat_display.see(tk.END)
+
+        self._temp_voice_file = os.path.join(tempfile.gettempdir(), f"voice_{int(time.time())}.wav")
+        self._audio_frames = []
+
+        def callback(indata, frames, time_info, status):
+            if self._is_recording_voice:
+                self._audio_frames.append(indata.copy())
+
+        try:
+            self._stream = sd.InputStream(samplerate=16000, channels=1, callback=callback)
+            self._stream.start()
+        except Exception as e:
+            self._is_recording_voice = False
+            self.voice_button.configure(text="🎤 Record Voice")
+            if hasattr(self, "_voice_auto_stop_timer") and self._voice_auto_stop_timer:
+                try:
+                    self.after_cancel(self._voice_auto_stop_timer)
+                except Exception:
+                    pass
+                self._voice_auto_stop_timer = None
+
+            self.chat_display.configure(state="normal")
+            ranges = self.chat_display.tag_ranges("recording_status")
+            if ranges:
+                self.chat_display.delete(ranges[0], ranges[1])
+            self.chat_display.configure(state="disabled")
+            self.display_message("System", f"⚠ Voice recording failed: {e}", is_system=True)
+
+    def _stop_voice_recording(self) -> None:
+        """Stops recording, checks 5MB payload limit, encodes WAV, and sends to server (B4)."""
+        if not getattr(self, "_is_recording_voice", False):
+            return
+
+        self._is_recording_voice = False
+        self.voice_button.configure(text="🎤 Record Voice")
+
+        if hasattr(self, "_voice_auto_stop_timer") and self._voice_auto_stop_timer:
+            try:
+                self.after_cancel(self._voice_auto_stop_timer)
+            except Exception:
+                pass
+            self._voice_auto_stop_timer = None
+
+        duration = round(time.time() - getattr(self, "_voice_start_time", time.time()), 1)
+
+        if hasattr(self, "_stream") and self._stream:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+        self.chat_display.configure(state="normal")
+        ranges = self.chat_display.tag_ranges("recording_status")
+        if ranges:
+            self.chat_display.delete(ranges[0], ranges[1])
+        self.chat_display.configure(state="disabled")
+
+        if not hasattr(self, "_audio_frames") or not self._audio_frames:
+            self.display_message("System", "⚠ Voice recording failed or audio device not found.", is_system=True)
+            return
+
+        try:
+            import numpy as np
+            from scipy.io import wavfile
+
+            audio_data = np.concatenate(self._audio_frames, axis=0)
+            wavfile.write(self._temp_voice_file, 16000, audio_data)
+
+            with open(self._temp_voice_file, "rb") as f:
+                audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+            if len(audio_b64.encode("utf-8")) > 4.5 * 1024 * 1024:
+                self.show_error("Voice recording too large (exceeds server limit of 5 MB). Please record a shorter message.")
+                return
+
+            self.append_voice_message(
+                sender=self.own_username,
+                audio_b64=audio_b64,
+                duration=duration,
+            )
+
+            if self.network_client:
+                if hasattr(self.network_client, "send_voice_message"):
+                    self.network_client.send_voice_message(self.room_type, self.target_name, audio_b64, duration)
+                elif hasattr(self.network_client, "send_packet"):
+                    self.network_client.send_packet(MSG_VOICE_MSG, {
+                        "room_type": self.room_type,
+                        "target": self.target_name,
+                        "to": self.target_name,
+                        "group": self.target_name,
+                        "from": self.own_username,
+                        "sender": self.own_username,
+                        "audio_b64": audio_b64,
+                        "duration": duration,
+                    })
+        except Exception as err:
+            self.show_error(f"Failed to process voice message: {err}")
+
+    def _play_audio_b64(self, audio_b64: str) -> None:
+        """Decodes Base64 audio data and plays it natively via OS sound player (B4)."""
+        try:
+            wav_bytes = base64.b64decode(audio_b64)
+            temp_play_file = os.path.join(tempfile.gettempdir(), f"play_{int(time.time() * 1000)}.wav")
+            with open(temp_play_file, "wb") as f:
+                f.write(wav_bytes)
+
+            if sys.platform == "darwin":  # macOS
+                subprocess.Popen(["afplay", temp_play_file])
+            elif sys.platform.startswith("win"):  # Windows
+                try:
+                    import winsound
+                    winsound.PlaySound(temp_play_file, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                except Exception:
+                    subprocess.Popen(["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_play_file}').PlaySync()"])
+            else:  # Linux
+                subprocess.Popen(["aplay", temp_play_file])
+        except Exception as err:
+            self.show_error(f"Playback failed: {err}")
+
+    def append_voice_message(self, sender: str, audio_b64: str, duration: float, timestamp: str = "") -> None:
+        """Embeds a replayable voice clip formatted and aligned like standard chat text (B4)."""
+        def _append():
+            if not self.winfo_exists():
+                return
+
+            ts = timestamp if timestamp else get_current_timestamp()
+            is_self = (sender == self.own_username or sender.lower() == self.own_username.lower() or sender == "You")
+
+            if hasattr(self, "_active_typers"):
+                self._active_typers.discard(sender)
+
+            self.chat_display.configure(state="normal")
+
+            for tag_name in ("typing_indicator", "recording_status"):
+                ranges = self.chat_display.tag_ranges(tag_name)
+                if ranges:
+                    self.chat_display.delete(ranges[0], ranges[1])
+
+            ts_str = f" • {ts}" if ts else ""
+            if is_self:
+                self.chat_display.insert(tk.END, f"You{ts_str}\n", ("self_header", "own_header"))
+            else:
+                self.chat_display.insert(tk.END, f"{sender}{ts_str}\n", ("other_header",))
+
+            start_idx = self.chat_display.index("end-1c")
+
+            play_btn = tk.Button(
+                self.chat_display,
+                text=f"🎵 Voice Clip ({duration:.1f}s) ▶",
+                font=("Segoe UI", 9, "bold"),
+                bg="#1976D2" if is_self else "#E0E0E0",
+                fg="#FFFFFF" if is_self else "#212121",
+                activebackground="#1565C0" if is_self else "#D6D6D6",
+                activeforeground="#FFFFFF" if is_self else "#000000",
+                relief="flat",
+                bd=0,
+                padx=12,
+                pady=5,
+                cursor="hand2",
+                command=lambda b64=audio_b64: self._play_audio_b64(b64),
+            )
+
+            if not hasattr(self, "_voice_buttons"):
+                self._voice_buttons = []
+            self._voice_buttons.append(play_btn)
+
+            self.chat_display.window_create(tk.END, window=play_btn)
+            self.chat_display.insert(tk.END, "\n\n")
+            end_idx = self.chat_display.index("end-1c")
+
+            tags_to_apply = ("self_msg", "own_msg") if is_self else ("other_msg", "other")
+            for tag in tags_to_apply:
+                self.chat_display.tag_add(tag, start_idx, end_idx)
+
+            self._render_typing_indicator_line()
+
+            self.chat_display.configure(state="disabled")
+            self.chat_display.see(tk.END)
+
+            if not is_self:
+                self._play_audio_b64(audio_b64)
+
+        self._run_on_ui_thread(_append)
 
     # =========================================================================
     # Action Handling & Message Sending (R6)
@@ -494,11 +842,16 @@ class ChatRoomWindow(tk.Toplevel):
         if not text:
             return
 
-        # Clear input box immediately (R6)
+        if self._typing_timer:
+            try:
+                self.after_cancel(self._typing_timer)
+            except Exception:
+                pass
+        self._stop_typing_status()
+
         self.message_entry.delete(0, tk.END)
 
         handled = False
-        # Invoke callback if supplied (R6)
         if self.on_send_message_callback:
             try:
                 res = self.on_send_message_callback(self.target_name, text)
@@ -507,7 +860,6 @@ class ChatRoomWindow(tk.Toplevel):
             if res is not False:
                 handled = True
 
-        # Transmit via network_client if available and not exclusively handled by callback
         if not handled and self.network_client:
             if self.room_type == ROOM_PRIVATE:
                 if hasattr(self.network_client, "send_private_message"):
@@ -520,7 +872,6 @@ class ChatRoomWindow(tk.Toplevel):
                 elif hasattr(self.network_client, "send_packet"):
                     self.network_client.send_packet(MSG_GROUP, {"group": self.target_name, "text": text})
         elif not handled and not self.network_client:
-            # Standalone fallback: display own message locally
             self.display_message(self.own_username, text, is_self=True)
 
     def on_send(self) -> None:
@@ -532,20 +883,28 @@ class ChatRoomWindow(tk.Toplevel):
     # =========================================================================
 
     def destroy(self) -> None:
-        """Cleanly cancels scheduled timers before destroying the window."""
-        if hasattr(self, "_focus_job") and self._focus_job:
-            try:
-                self.after_cancel(self._focus_job)
-            except Exception:
-                pass
-            self._focus_job = None
+        """Cleanly stops voice stream, cancels scheduled timers, and notifies server if typing (B3, B4)."""
+        if getattr(self, "_is_typing_active", False):
+            self._stop_typing_status()
 
-        if self._poll_job:
-            try:
-                self.after_cancel(self._poll_job)
-            except Exception:
-                pass
-            self._poll_job = None
+        if getattr(self, "_is_recording_voice", False):
+            self._is_recording_voice = False
+            if hasattr(self, "_stream") and self._stream:
+                try:
+                    self._stream.stop()
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
+
+        for job_attr in ("_typing_timer", "_focus_job", "_poll_job", "_voice_auto_stop_timer"):
+            job = getattr(self, job_attr, None)
+            if job:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+                setattr(self, job_attr, None)
 
         super().destroy()
 
@@ -568,68 +927,3 @@ class ChatRoomWindow(tk.Toplevel):
                     self.on_close_callback()
 
         self.destroy()
-
-
-# =============================================================================
-# Standalone Mock & Preview Launcher (R5, R6)
-# =============================================================================
-if __name__ == "__main__":
-    import time
-
-    def _safe_print(*args: Any, **kwargs: Any) -> None:
-        try:
-            print(*args, **kwargs)
-        except UnicodeEncodeError:
-            enc = sys.stdout.encoding or "utf-8"
-            clean_args = [str(a).encode(enc, errors="replace").decode(enc) for a in args]
-            print(*clean_args, **kwargs)
-
-    _safe_print("[ChatRoomWindow] Launching standalone preview with mock callbacks...")
-    root = tk.Tk()
-    root.withdraw()  # Hide root so only ChatRoomWindow is displayed
-
-    def mock_on_send(target: str, text: str) -> None:
-        _safe_print(f"[MOCK SEND -> {target}] {text}")
-        # Echo message locally
-        window.display_message(sender="CurrentUser", message=text, is_self=True)
-
-        # Simulate a reply from peer after a short delay
-        def _simulate_peer_reply():
-            if window.winfo_exists():
-                window.display_message(sender=target, message=f"Echo reply: '{text}' received!", is_self=False)
-
-        window.after(1000, _simulate_peer_reply)
-
-    def mock_on_close(room_type: str = "", target: str = "") -> None:
-        _safe_print(f"[MOCK CLOSE] Chat window for {target} ({room_type}) closed.")
-        root.destroy()
-
-    window = ChatRoomWindow(
-        parent=root,
-        room_type=ROOM_GROUP,
-        target_name="StudyGroup",
-        own_username="CurrentUser",
-        on_send_message_callback=mock_on_send,
-        on_close_callback=mock_on_close,
-    )
-    window.set_participants(["CurrentUser", "Alice", "Bob"])
-
-    # Populate with sample messages (R6)
-    window.display_message("System", "Welcome to StudyGroup chat room!", is_system=True)
-    window.display_message("Alice", "Hello team! Is our R5/R6 chat window component ready?", timestamp="14:00:10")
-    window.display_message("CurrentUser", "Yes! It has thread safety, auto-scroll, and text tags.", timestamp="14:00:45", is_self=True)
-    window.display_message("Bob", "Awesome, testing message input and send button now.", timestamp="14:01:20")
-
-    # Demonstrate thread safety: background worker pushes a message after 2 seconds
-    def background_thread_worker():
-        time.sleep(2)
-        window.display_message(
-            sender="Alice",
-            message="[Thread-Safe Message] Delivered safely from a background thread via after()!",
-            is_self=False,
-        )
-
-    bg_thread = threading.Thread(target=background_thread_worker, daemon=True)
-    bg_thread.start()
-
-    root.mainloop()

@@ -108,7 +108,13 @@ class NetworkClient:
 
     def send_typing(self, room_type: str, target: str, is_typing: bool) -> None:
         """Transmits typing status packet (B3)."""
-        self.send_packet(MSG_TYPING, {"room_type": room_type, "target": target, "is_typing": is_typing})
+        self.send_packet(MSG_TYPING, {
+            "room_type": room_type,
+            "target": target,
+            "from": self.username,
+            "sender": self.username,
+            "is_typing": is_typing,
+        })
 
     def send_ai_summary_request(self, room_type: str, target: str) -> None:
         """Transmits AI conversation summary request packet (B1)."""
@@ -116,4 +122,13 @@ class NetworkClient:
 
     def send_voice_message(self, room_type: str, target: str, audio_b64: str, duration: float) -> None:
         """Transmits push-to-talk voice clip packet (B4)."""
-        self.send_packet(MSG_VOICE_MSG, {"room_type": room_type, "target": target, "audio_b64": audio_b64, "duration": duration})
+        self.send_packet(MSG_VOICE_MSG, {
+            "room_type": room_type,
+            "target": target,
+            "to": target,
+            "group": target,
+            "from": self.username,
+            "sender": self.username,
+            "audio_b64": audio_b64,
+            "duration": duration,
+        })
